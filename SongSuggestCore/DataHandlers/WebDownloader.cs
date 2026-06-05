@@ -40,7 +40,8 @@ namespace WebDownloading
         //Default throttler should not impact in game client much unless a player has many scores, but the out of game client has some large batch jobs that could use full speed
         public void FullThrottle()
         {
-            _ScoreSaberThrottler = new Throttler() { callPerPeriod = 100, callPeriodSeconds = 16 }; //400/60
+            _ScoreSaberThrottler = new Throttler() { callPerPeriod = 50, callPeriodSeconds = 11 }; //400/60
+            //_ScoreSaberThrottler = new Throttler() { callPerPeriod = 20, callPeriodSeconds = 6 }; //400/60
             _BeatLeaderThrottler = new Throttler() { callPerPeriod = 50, callPeriodSeconds = 11 }; //50/10
             _AccSaberReloadedThrottler = new Throttler() { callPerPeriod = 100, callPeriodSeconds = 16 }; //400/60
         }
@@ -89,6 +90,7 @@ namespace WebDownloading
                 _ScoreSaberThrottler.Call();
                 //https://scoresaber.com/api/leaderboard/by-hash/E42BCDF50EA1F961CB8CEFE502E82806866F6479/info?difficulty=9&gameMode=SoloStandard
                 String webLink = $"https://scoresaber.com/api/leaderboard/by-hash/{hash}/info?difficulty={difficulty}&gameMode=SoloStandard";
+                Console.WriteLine($"{webLink}");
                 String songInfo = client.DownloadString(webLink);
                 songSuggest.log?.WriteLine("Unknown Song found and downloaded");
                 return JsonConvert.DeserializeObject<LeaderboardInfo>(songInfo, serializerSettings);
@@ -451,7 +453,7 @@ namespace WebDownloading
             return new BeatLeaderJson.ClanMembersList();
         }
 
-        //BeatLeader last updated Leaderboard Time
+        //AccSaberReloaded last updated Leaderboard Time
         public AccSaberReloadedLastUpdated GetAccSaberReloadedLeaderboardUpdateTime()
         {
             string webString = "";
@@ -470,6 +472,27 @@ namespace WebDownloading
                 songSuggest.log?.WriteLine($"Error getting: {webString}");
             }
             return new AccSaberReloadedLastUpdated();
+        }
+
+        //AccSaberReloaded ranked songs
+        public List<AccSaberReloadedRankedSong> GetAccSaberReloadedRankedSongs()
+        {
+            string webString = "";
+            try
+            {
+                _AccSaberReloadedThrottler.Call();
+                //https://api.accsaberreloaded.com/v1/maps/difficulties/all
+                webString = $"https://api.accsaberreloaded.com/v1/maps/difficulties/all";
+
+                String updated = client.DownloadString(webString);
+                return JsonConvert.DeserializeObject<List<AccSaberReloadedRankedSong>>(updated, serializerSettings);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex);
+                songSuggest.log?.WriteLine($"Error getting: {webString}");
+            }
+            return new List<AccSaberReloadedRankedSong>();
         }
 
 

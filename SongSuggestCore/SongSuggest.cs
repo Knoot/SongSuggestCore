@@ -22,22 +22,13 @@ namespace SongSuggestNS
         //Static Version Info based on a SemVer.
         private static int _semVerMajor = 2;
         private static int _semVerMinor = 3;
-        private static int _semVerPatch = 13;
+        private static int _semVerPatch = 14;
 
-        //2.3.0: Support for Auto Balancer leaderboard (Including Local Score display updates).
-        //2.3.1: Fix to not using players score when calculating distance
-        //2.3.2: Removed Slower Song scores (for now)
-        //2.3.3: Updated algorithm for Comparative Best Profile Select
-        //2.3.4: Fix to out of bounds, trying to lookup Comparative Best data for songs for that was removed by low total playcount filter
-        //2.3.5: More adjustments for Auto Balancer (Web + Storage)
-        //2.3.6: Fixes to Beat Leader searching
-        //2.3.7: Auto Balancer Curve 1.3
-        //2.3.8: Bugfix: Local Scores is set to use Local Scores, not Session Scores.
-        //2.3.9:  Add AccSaberReloaded Endpoints
-        //2.3.10: Fix crash when last suggest lists a song that has been deranked (null reference return on the ID from SongLibrary)
+        //2.3.10: Fix crash when last suggest lists a song that has been deranked. (null reference return on the ID from SongLibrary)
         //2.3.11: Add AccSaberReloaded leaderboard sync.
         //2.3.12: Fixed Throttler issues with 4900+ BL scores profiles.
         //2.3.13: Fixed unknown songs in Leaderboard Data when suggesting songs. Even with filtering songs could get deranked and old leaderboard data could be present.
+        //2.3.14: Auto Update of Acc Saber ranked songs via AccSaberReloaded.
         
         //2.3.X: Include handling of modifiers for different leaderboards vs score locations
 
@@ -112,7 +103,10 @@ namespace SongSuggestNS
             if (SongSuggest.MainInstance == this) songLibrary.SetActive();
             songLibrary.SetLibrary(fileHandler.LoadSongLibrary());
 
-            //**BUG** Some issues with SongLiking/Ban that can cause crashes. Possible related to unknown songs.
+            //Update Song Library
+            if (CoreSettings.UpdateAccSaberLeaderboard) UpdateAccSaberSongLibrary();
+
+
 
             songLiking = new SongLiking
             {
@@ -128,6 +122,8 @@ namespace SongSuggestNS
 
             lastSuggestions = new LastRankedSuggestions { songSuggest = this };
             lastSuggestions.Load();
+
+
 
             status = "Preparing Link Data";
 
@@ -585,7 +581,6 @@ namespace SongSuggestNS
             }
         }
 
-        //For now refresh request is manual.
         public void UpdateBeatLeaderCacheFiles()
         {
             log?.WriteLine("Starting to load BeatLeader data");
@@ -653,6 +648,80 @@ namespace SongSuggestNS
             if (removeScoreSaberOnlyScoresFromBeatLeaderLeaderBoard) RemoveScoreSaberOnlyScoresFromBeatLeaderLeaderBoard();
 
         }
+
+        //Update SongCategories and Complexity rating on Acc Saber songs in the SongLibrary.
+        private void UpdateAccSaberSongLibrary()
+        {
+            //Return if Library is already matching the Leaderboard File
+            log?.WriteLine($"Acc Saber Song Library from: {filesMeta.accSaberSongsUpdated}   Leaderboard From: {filesMeta.accSaberLeaderboardUpdated}");
+            if (filesMeta.accSaberSongsUpdated == filesMeta.accSaberLeaderboardUpdated) return;
+
+            log?.WriteLine($"Updating Acc Saber Song Library");
+            //Get the songs from the web.
+            //var songs = songSuggest.webDownloader.GetAccSaberSongInfo();
+            var songs = webDownloader.GetAccSaberReloadedRankedSongs();
+
+            //Skip update if web is unavailable, or returns an empty list.
+            log?.WriteLine($"Received Ranked AccSaber Songs: {songs.Count}");
+            if (songs.Count == 0) return;
+
+            //Remove all current categories
+            SongCategory allAccCategories = SongCategory.AccSaberStandard | SongCategory.AccSaberTrue | SongCategory.AccSaberTech;
+
+            List<SongID> librarySongIDs = SongLibrary.GetAllRankedSongIDs(allAccCategories).ToList();
+
+            //Remove complexity rating and acc saber ranked from all library songs.
+            foreach (var songID in librarySongIDs)
+            {
+                Song song = songID.GetSong();
+
+                song.complexityAccSaber = 0;
+                songLibrary.RemoveSongCategory(song, allAccCategories);
+            }
+
+            foreach (var song in songs)
+            {
+                string characteristic = "Standard";
+                string difficulty = song.difficulty;
+                string hash = song.songHash;
+
+                song.internalID = songLibrary.GetID(characteristic, difficulty, hash);
+                var songObject = song.internalID.GetSong();
+
+                //Find Category type
+                SongCategory category;
+
+                switch (song.categoryCode)
+                {
+                    case "true_acc":
+                        category = SongCategory.AccSaberTrue;
+                        break;
+                    case "tech_acc":
+                        category = SongCategory.AccSaberTech;
+                        break;
+                    case "standard_acc":
+                        category = SongCategory.AccSaberStandard;
+                        break;
+
+                    default:
+                        // Do Nothing
+                        category = 0;
+                        break;
+                }
+
+                songLibrary.AddSongCategory(songObject, category);
+                songObject.complexityAccSaber = song.complexity;
+                songObject.name = song.songName;
+                songObject.scoreSaberID = song.ssLeaderboardId;
+                songObject.beatLeaderID = song.blLeaderboardId;
+            }
+
+            //Save Updated Library
+            songLibrary.Save();
+            filesMeta.accSaberSongsUpdated = filesMeta.accSaberLeaderboardUpdated;
+            fileHandler.SaveFilesMeta(filesMeta);
+        }
+
 
         //Downloads newest Leaderboard
         private void RefreshAccSaberLeaderBoard()

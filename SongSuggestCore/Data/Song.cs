@@ -102,8 +102,8 @@ namespace SongLibraryNS
                 case "expert":
                     return "Expert";
                 case "expertplus":
-                    return "ExpertPlus";
                 case "expert+":
+                case "expert_plus":
                     return "ExpertPlus";
                 default:
                     throw new Exception("Unknown Difficulty");
@@ -125,9 +125,9 @@ namespace SongLibraryNS
                     return "5";
                 case "expert":
                     return "7";
-                case "expertplus":
-                    return "9";
                 case "expert+":
+                case "expertplus":
+                case "expert_plus":
                     return "9";
                 case "1":
                     return "1";

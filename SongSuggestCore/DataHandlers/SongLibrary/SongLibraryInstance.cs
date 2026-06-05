@@ -199,12 +199,6 @@ namespace SongLibraryNS
             if (!UIDStringToSong.TryGetValue(songID.UniqueID, out Song song)) return "";
             return song.GetDifficultyText();
         }
-        
-        [Obsolete("Should also include characteristic")]
-        public SongID GetID(string hash, string difficulty)
-        {
-            return GetID("Standard", difficulty, hash);
-        }
 
         // Returns a valid SongID for the given parameters. Creates a new Song entry and returns its InternalID link if necessary.
         public SongID GetID(string characteristic, string difficulty, string hash)
@@ -216,6 +210,12 @@ namespace SongLibraryNS
                 : UpsertSong(characteristic, difficulty, hash);
 
             return songID;
+        }
+
+        [Obsolete("Should also include characteristic")]
+        public SongID GetID(string hash, string difficulty)
+        {
+            return GetID("Standard", difficulty, hash);
         }
 
         //Returns the ID string of an object if available.
