@@ -20,6 +20,8 @@ namespace WebDownloading
 {
     public class WebDownloader
     {
+        private const string InitialDataBaseUrl = "https://raw.githubusercontent.com/Knoot/SmartSongSuggest/master/TaohSongSuggest/Configuration/InitialData";
+
         public SongSuggest songSuggest { get; set; }
 
         private WebClient client = new WebClient();
@@ -520,7 +522,7 @@ namespace WebDownloading
         {
             songSuggest.status = "Getting Files.meta";
             //Let us check meta for updates.
-            string webPath = "https://raw.githubusercontent.com/HypersonicSharkz/SmartSongSuggest/master/TaohSongSuggest/Configuration/InitialData/Files.meta";
+            string webPath = $"{InitialDataBaseUrl}/Files.meta";
             string metaInfo = client.DownloadString(webPath);
             return JsonConvert.DeserializeObject<FilesMeta>(metaInfo, serializerSettings);
         }
@@ -529,7 +531,7 @@ namespace WebDownloading
         {
             songSuggest.status = "Downloading Song Library";
             //Song Library pull
-            string webPath = "https://raw.githubusercontent.com/HypersonicSharkz/SmartSongSuggest/master/TaohSongSuggest/Configuration/InitialData/SongLibrary.json";
+            string webPath = $"{InitialDataBaseUrl}/SongLibrary.json";
             //Download the file to a tmp file, add contents, and delete tmp when done.
             string songLibraryInfo = client.DownloadString(webPath);
             List<Song> songLibrary = JsonConvert.DeserializeObject<List<Song>>(songLibraryInfo, serializerSettings);
@@ -541,7 +543,7 @@ namespace WebDownloading
             songSuggest.status = "Downloading Player Scores";
             //Top 10k Download
             //where to get the files from
-            string webPath = "https://raw.githubusercontent.com/HypersonicSharkz/SmartSongSuggest/master/TaohSongSuggest/Configuration/InitialData/Top10KPlayers.json";
+            string webPath = $"{InitialDataBaseUrl}/Top10KPlayers.json";
             string downloadString = client.DownloadString(webPath);
 
             return JsonConvert.DeserializeObject<List<Top10kPlayer>>(downloadString, serializerSettings);

@@ -22,13 +22,16 @@ namespace SongSuggestNS
         //Static Version Info based on a SemVer.
         private static int _semVerMajor = 2;
         private static int _semVerMinor = 3;
-        private static int _semVerPatch = 14;
+        private static int _semVerPatch = 17;
 
         //2.3.10: Fix crash when last suggest lists a song that has been deranked. (null reference return on the ID from SongLibrary)
         //2.3.11: Add AccSaberReloaded leaderboard sync.
         //2.3.12: Fixed Throttler issues with 4900+ BL scores profiles.
         //2.3.13: Fixed unknown songs in Leaderboard Data when suggesting songs. Even with filtering songs could get deranked and old leaderboard data could be present.
         //2.3.14: Auto Update of Acc Saber ranked songs via AccSaberReloaded.
+        //2.3.15: Add BeatSaver njs/nps/seconds song metadata storage.
+        //2.3.16: Add song metadata range filters for suggestions.
+        //2.3.17: Avoid overwriting local BeatSaver metadata library with older web cache on format-only updates.
         
         //2.3.X: Include handling of modifiers for different leaderboards vs score locations
 
@@ -524,7 +527,15 @@ namespace SongSuggestNS
             contentChange = diskVersion.Major(FilesMetaType.SongLibraryVersion) != cacheFilesWebVersion.Major(FilesMetaType.SongLibraryVersion);
             log?.WriteLine($"Song Format  - changed? {formatChange}");
             log?.WriteLine($"Song Content - Disk: {diskVersion.Major(FilesMetaType.SongLibraryVersion)} Web: {cacheFilesWebVersion.Major(FilesMetaType.SongLibraryVersion)} {contentChange} Changed: {contentChange} ");
-            if (formatChange || contentChange)
+            bool localSongLibraryHasBeatSaverMetadata = fileHandler.LoadSongLibrary()
+                .Any(song => song.njs > 0 || song.nps > 0 || song.seconds > 0);
+
+            if (formatChange && !contentChange && localSongLibraryHasBeatSaverMetadata)
+            {
+                log?.WriteLine("Song library format changed, but local library already has BeatSaver metadata. Skipping web download.");
+                filesUpdated = true;
+            }
+            else if (formatChange || contentChange)
             {
                 log?.WriteLine("Starting Download of Song Library");
                 List<Song> songs = webDownloader.GetSongLibrary();

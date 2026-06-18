@@ -29,6 +29,9 @@ namespace SongLibraryNS
         public string hash { get; set; }
         public string difficulty { get; set; }
         public string characteristic { get; set; } = "Standard"; //Default might be removed later once all data is updated, for now updating on first load is fine.
+        public double njs { get; set; }
+        public double nps { get; set; }
+        public double seconds { get; set; }
         
         //Valid options are these ... not sure if there should be made a validation on this or not.
         //Standard: "Standard" - Regular gameplay with walls, notes, and bombs.

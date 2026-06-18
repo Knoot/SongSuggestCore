@@ -121,6 +121,9 @@ namespace Actions
         public void SuggestedSongs()
         {
             ActiveRankedSongSuggest = this;
+            settings.FilterSettings = settings.FilterSettings ?? new FilterSettings();
+            settings.PlaylistSettings = settings.PlaylistSettings ?? new PlaylistSettings();
+
             //save request
             songSuggest.fileHandler.SaveSongSuggestRequest(settings);
 
@@ -171,6 +174,10 @@ namespace Actions
             //Performs special selection filtering for Leaderboards
             LeaderboardSpecialFiltering();
             UpdateTimeTaken("After: LeaderboardSpecialFiltering()");
+
+            //Apply user controlled song metadata limits.
+            SongMetadataFiltering();
+            UpdateTimeTaken("After: SongMetadataFiltering()");
 
             //Creates the playist of remaining songs
             CreatePlaylist();
@@ -549,6 +556,45 @@ namespace Actions
                     .Where(c => SongLibrary.HasAnySongCategory(c, accSaberPlaylistCategories))
                     .ToList();
             }
+        }
+
+        //Filtering that applies user controlled song metadata ranges.
+        private void SongMetadataFiltering()
+        {
+            FilterSettings filterSettings = settings.FilterSettings ?? new FilterSettings();
+            int beforeCount = filteredSuggestions.Count;
+
+            filteredSuggestions = filteredSuggestions
+                .Where(songID => SongMatchesMetadataFilters(songID.GetSong(), filterSettings))
+                .ToList();
+
+            int removedCount = beforeCount - filteredSuggestions.Count;
+            if (removedCount > 0)
+            {
+                songSuggest.log?.WriteLine($"Song metadata filters removed {removedCount} suggestions.");
+            }
+        }
+
+        private bool SongMatchesMetadataFilters(Song song, FilterSettings filterSettings)
+        {
+            if (song == null) return false;
+
+            return IsInActiveRange(song.njs, filterSettings.minNjs, filterSettings.maxNjs)
+                && IsInActiveRange(song.nps, filterSettings.minNps, filterSettings.maxNps)
+                && IsInActiveRange(song.seconds, filterSettings.minSeconds, filterSettings.maxSeconds)
+                && IsInActiveRange(song.starScoreSaber, filterSettings.minScoreSaberStars, filterSettings.maxScoreSaberStars)
+                && IsInActiveRange(song.starBeatLeader, filterSettings.minBeatLeaderStars, filterSettings.maxBeatLeaderStars);
+        }
+
+        private bool IsInActiveRange(double value, double min, double max)
+        {
+            bool hasMin = min > 0;
+            bool hasMax = max > 0;
+            if (!hasMin && !hasMax) return true;
+            if (value <= 0) return false;
+            if (hasMin && value < min) return false;
+            if (hasMax && value > max) return false;
+            return true;
         }
 
         //Make Playlist

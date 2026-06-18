@@ -31,7 +31,7 @@ namespace Settings
         [Obsolete("Dynamic values at low values, higher values does not seem at add currently")]
         public int OriginSongCount { get; set; } = 50;
         public SongCategory AccSaberPlaylistCategories { get; set; } = SongCategory.AccSaberStandard | SongCategory.AccSaberTrue | SongCategory.AccSaberTech;
-        public FilterSettings FilterSettings { get; set; }
-        public PlaylistSettings PlaylistSettings { get; set; }
+        public FilterSettings FilterSettings { get; set; } = new FilterSettings();
+        public PlaylistSettings PlaylistSettings { get; set; } = new PlaylistSettings();
     }
 }

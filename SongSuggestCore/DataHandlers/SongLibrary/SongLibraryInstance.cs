@@ -3,6 +3,7 @@ using SongSuggestNS;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using BeatSaverJson;
 using BeatLeaderJson;
 using Actions;
 using PlaylistJson;
@@ -14,7 +15,7 @@ namespace SongLibraryNS
     {
         //Dynamics
         public SongSuggest songSuggest { get; set; }
-        public const String FormatVersion = "2.1";
+        public const String FormatVersion = "2.2";
 
         //Returns true if songs has been added/modified since load/last save.
         public bool Updated { get; set; } = false;
@@ -166,6 +167,50 @@ namespace SongLibraryNS
         public SongID UpsertSong(PlayerScore song)
         {
             return UpsertSong(song.leaderboard);
+        }
+
+        public bool UpdateBeatSaverMetadata(Song song)
+        {
+            if (song == null || string.IsNullOrEmpty(song.hash)) return false;
+
+            BeatSaverSongInfo beatSaverInfo = songSuggest.webDownloader.GetBeatSaverSongInfo(song.hash);
+            BeatSaverDiff diff = beatSaverInfo?.versions?
+                .Where(version => string.Equals(version.hash, song.hash, StringComparison.OrdinalIgnoreCase))
+                .SelectMany(version => version.diffs ?? new BeatSaverDiff[0])
+                .FirstOrDefault(candidate =>
+                    string.Equals(candidate.characteristic, song.characteristic, StringComparison.OrdinalIgnoreCase) &&
+                    Song.GetDifficultyValue(candidate.difficulty) == song.difficulty);
+
+            if (diff == null) return false;
+
+            bool updated = false;
+
+            if (song.beatSaverID != beatSaverInfo.id)
+            {
+                song.beatSaverID = beatSaverInfo.id;
+                updated = true;
+            }
+
+            if (song.njs != diff.njs)
+            {
+                song.njs = diff.njs;
+                updated = true;
+            }
+
+            if (song.nps != diff.nps)
+            {
+                song.nps = diff.nps;
+                updated = true;
+            }
+
+            if (song.seconds != diff.seconds)
+            {
+                song.seconds = diff.seconds;
+                updated = true;
+            }
+
+            if (updated) Updated = true;
+            return updated;
         }
         #endregion
 
