@@ -578,6 +578,7 @@ namespace Actions
         private bool SongMatchesMetadataFilters(Song song, FilterSettings filterSettings)
         {
             if (song == null) return false;
+            if (filterSettings.ignoreOneSaber && string.Equals(song.characteristic, "OneSaber", StringComparison.OrdinalIgnoreCase)) return false;
 
             return IsInActiveRange(song.njs, filterSettings.minNjs, filterSettings.maxNjs)
                 && IsInActiveRange(song.nps, filterSettings.minNps, filterSettings.maxNps)

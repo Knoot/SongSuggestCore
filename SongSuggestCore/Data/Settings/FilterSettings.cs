@@ -19,5 +19,6 @@ namespace Settings
         public double maxScoreSaberStars { get; set; } = 0.0;
         public double minBeatLeaderStars { get; set; } = 0.0;
         public double maxBeatLeaderStars { get; set; } = 0.0;
+        public bool ignoreOneSaber { get; set; } = false;
     }
 }
