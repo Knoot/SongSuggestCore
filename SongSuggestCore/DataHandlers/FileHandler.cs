@@ -133,7 +133,7 @@ namespace FileHandling
 
         public List<Top10kPlayer> LoadScoreBoard(string scoreBoardName)
         {
-            string fileName = $"{filePathSettings.likedSongsPath}{scoreBoardName}.json";
+            string fileName = GetScoreBoardPath(scoreBoardName);
             if (!File.Exists(fileName)) SaveScoreBoard(new List<Top10kPlayer>(), scoreBoardName);
             String linkPlayerJSON = File.ReadAllText(fileName);
             return JsonConvert.DeserializeObject<List<Top10kPlayer>>(linkPlayerJSON, serializerSettings);
@@ -141,13 +141,13 @@ namespace FileHandling
 
         public void SaveScoreBoard(List<Top10kPlayer> players, string scoreBoardName)
         {
-            string fileName = $"{filePathSettings.likedSongsPath}{scoreBoardName}.json";
+            string fileName = GetScoreBoardPath(scoreBoardName);
             File.WriteAllText(fileName, JsonConvert.SerializeObject(players));
         }
 
         public List<T> LoadScoreBoard<T>(string scoreBoardName) where T : Top10kPlayer, new()
         {
-            string fileName = $"{filePathSettings.likedSongsPath}{scoreBoardName}.json";
+            string fileName = GetScoreBoardPath(scoreBoardName);
 
             if (!File.Exists(fileName))
             {
@@ -160,8 +160,17 @@ namespace FileHandling
 
         public void SaveScoreBoard<T>(List<T> scoreBoard, string scoreBoardName)
         {
-            string fileName = $"{filePathSettings.likedSongsPath}{scoreBoardName}.json";
+            string fileName = GetScoreBoardPath(scoreBoardName);
             File.WriteAllText(fileName, JsonConvert.SerializeObject(scoreBoard, serializerSettings));
+        }
+
+        private string GetScoreBoardPath(string scoreBoardName)
+        {
+            string basePath = scoreBoardName == "Top10KPlayers"
+                ? filePathSettings.top10kPlayersPath
+                : filePathSettings.likedSongsPath;
+
+            return $"{basePath}{scoreBoardName}.json";
         }
 
         public Boolean LinkedDataExist()

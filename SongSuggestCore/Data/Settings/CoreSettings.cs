@@ -17,5 +17,7 @@ namespace Settings
         public bool FilterScoreSaberBiasInBeatLeader { get; set; } = true;
         //Allows a client to increase web requests to limits, should only be used if not using other web requests during run.
         public bool MaxWebRequests { get; set; } = false;
+        public bool ValidateCacheFilesOnInitialize { get; set; } = true;
+        public bool LoadRuntimeDataOnInitialize { get; set; } = true;
     }
 }

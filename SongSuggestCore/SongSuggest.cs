@@ -14,6 +14,8 @@ using PlayerScores;
 using System.Linq;
 using PlaylistNS;
 using Newtonsoft.Json.Linq;
+using BeatSaverJson;
+using ScoreSabersJson;
 
 namespace SongSuggestNS
 {
@@ -97,7 +99,7 @@ namespace SongSuggestNS
             status = "Checking loaded data for new Online Files";
 
             //Validate file versions and checks for new data.
-            ValidateCacheFiles();
+            if (CoreSettings.ValidateCacheFilesOnInitialize) ValidateCacheFiles();
 
             //Load data from disk.
 
@@ -108,6 +110,12 @@ namespace SongSuggestNS
 
             //Update Song Library
             if (CoreSettings.UpdateAccSaberLeaderboard) UpdateAccSaberSongLibrary();
+
+            if (!CoreSettings.LoadRuntimeDataOnInitialize)
+            {
+                status = "Ready";
+                return;
+            }
 
 
 
@@ -610,6 +618,168 @@ namespace SongSuggestNS
                 filesMeta.beatLeaderLeaderboardUpdated = lastUpdate;
                 fileHandler.SaveFilesMeta(filesMeta);
             }
+        }
+
+        public void RefreshInitialData(
+            bool updateScoreSaberSongs,
+            bool updateBeatLeader,
+            bool updateAccSaber,
+            bool updateBeatSaverMetadata,
+            bool onlyMissingBeatSaverMetadata = true,
+            int maxBeatSaverMetadataSongs = 0)
+        {
+            if (updateScoreSaberSongs) UpdateScoreSaberRankedSongLibrary();
+
+            if (updateBeatLeader)
+            {
+                UpdateBeatLeaderCacheFiles();
+                LoadBeatLeaderLeaderBoard();
+            }
+
+            if (updateAccSaber)
+            {
+                UpdateAccSaberCacheFiles();
+                UpdateAccSaberSongLibrary();
+            }
+
+            if (updateBeatSaverMetadata)
+            {
+                UpdateBeatSaverMetadata(onlyMissingBeatSaverMetadata, maxBeatSaverMetadataSongs);
+            }
+        }
+
+        public void UpdateScoreSaberRankedSongLibrary()
+        {
+            log?.WriteLine("Starting ScoreSaber ranked song library update");
+
+            LeaderboardInfoCollection firstPage = webDownloader.GetLeaderBoardCollection(1);
+            if (firstPage?.leaderboards == null || firstPage.metadata == null || firstPage.metadata.itemsPerPage <= 0)
+            {
+                log?.WriteLine("ScoreSaber ranked song library update skipped: no leaderboard data received.");
+                return;
+            }
+
+            int pages = (int)Math.Ceiling((double)firstPage.metadata.total / firstPage.metadata.itemsPerPage);
+            List<LeaderboardInfo> leaderboards = new List<LeaderboardInfo>();
+            leaderboards.AddRange(firstPage.leaderboards.Where(leaderboard => leaderboard != null));
+
+            for (int page = 2; page <= pages; page++)
+            {
+                LeaderboardInfoCollection pageData = webDownloader.GetLeaderBoardCollection(page);
+                if (pageData?.leaderboards != null)
+                {
+                    leaderboards.AddRange(pageData.leaderboards.Where(leaderboard => leaderboard != null));
+                }
+
+                if (page % 25 == 0 || page == pages)
+                {
+                    log?.WriteLine($"ScoreSaber ranked song library update page {page} / {pages}. Entries: {leaderboards.Count} / {firstPage.metadata.total}");
+                }
+            }
+
+            HashSet<string> rankedScoreSaberIDs = new HashSet<string>(leaderboards.Select(leaderboard => $"{leaderboard.id}"));
+
+            List<Song> existingScoreSaberSongs = songLibrary.UIDStringToSong.Values
+                .Distinct()
+                .Where(song => !string.IsNullOrEmpty(song.scoreSaberID))
+                .ToList();
+
+            foreach (Song song in existingScoreSaberSongs.Where(song => !rankedScoreSaberIDs.Contains(song.scoreSaberID)))
+            {
+                LeaderboardInfo leaderboard = webDownloader.GetLeaderboardInfo(song.scoreSaberID);
+                if (leaderboard?.id > 0 && leaderboard.ranked)
+                {
+                    leaderboards.Add(leaderboard);
+                    rankedScoreSaberIDs.Add($"{leaderboard.id}");
+                }
+            }
+
+            foreach (LeaderboardInfo leaderboard in leaderboards)
+            {
+                if (leaderboard?.difficulty?.gameMode == null || string.IsNullOrEmpty(leaderboard.songHash)) continue;
+                songLibrary.UpsertSong(leaderboard);
+            }
+
+            foreach (Song song in existingScoreSaberSongs.Where(song => !rankedScoreSaberIDs.Contains(song.scoreSaberID)))
+            {
+                songLibrary.RemoveSongCategory(song, SongCategory.ScoreSaber);
+                song.starScoreSaber = 0;
+            }
+
+            songLibrary.Save();
+            log?.WriteLine($"ScoreSaber ranked song library update done. Ranked entries: {rankedScoreSaberIDs.Count}");
+        }
+
+        public int UpdateBeatSaverMetadata(bool onlyMissing = true, int maxSongs = 0)
+        {
+            log?.WriteLine($"Starting BeatSaver metadata update. Only missing: {onlyMissing}. Max songs: {maxSongs}");
+
+            List<Song> songs = songLibrary.UIDStringToSong.Values
+                .Distinct()
+                .Where(song => song.songCategory != 0 && !string.IsNullOrEmpty(song.hash))
+                .Where(song => !onlyMissing || string.IsNullOrEmpty(song.beatSaverID) || song.njs <= 0 || song.nps <= 0 || song.seconds <= 0)
+                .ToList();
+
+            if (maxSongs > 0) songs = songs.Take(maxSongs).ToList();
+
+            int updated = 0;
+            int processed = 0;
+
+            foreach (IGrouping<string, Song> hashGroup in songs.GroupBy(song => song.hash.ToUpperInvariant()))
+            {
+                BeatSaverSongInfo beatSaverInfo = webDownloader.GetBeatSaverSongInfo(hashGroup.Key);
+                if (beatSaverInfo?.versions == null) continue;
+
+                foreach (Song song in hashGroup)
+                {
+                    BeatSaverDiff diff = beatSaverInfo.versions
+                        .Where(version => string.Equals(version.hash, song.hash, StringComparison.OrdinalIgnoreCase))
+                        .SelectMany(version => version.diffs ?? new BeatSaverDiff[0])
+                        .FirstOrDefault(candidate =>
+                            string.Equals(candidate.characteristic, song.characteristic, StringComparison.OrdinalIgnoreCase) &&
+                            Song.GetDifficultyValue(candidate.difficulty) == song.difficulty);
+
+                    if (diff == null) continue;
+
+                    bool changed = false;
+
+                    if (song.beatSaverID != beatSaverInfo.id)
+                    {
+                        song.beatSaverID = beatSaverInfo.id;
+                        changed = true;
+                    }
+
+                    if (song.njs != diff.njs)
+                    {
+                        song.njs = diff.njs;
+                        changed = true;
+                    }
+
+                    if (song.nps != diff.nps)
+                    {
+                        song.nps = diff.nps;
+                        changed = true;
+                    }
+
+                    if (song.seconds != diff.seconds)
+                    {
+                        song.seconds = diff.seconds;
+                        changed = true;
+                    }
+
+                    if (changed) updated++;
+                    processed++;
+                }
+
+                if (processed > 0 && processed % 500 == 0)
+                {
+                    log?.WriteLine($"BeatSaver metadata update processed {processed} / {songs.Count}. Updated: {updated}");
+                }
+            }
+
+            if (updated > 0) songLibrary.Save();
+            log?.WriteLine($"BeatSaver metadata update done. Processed: {processed}. Updated: {updated}");
+            return updated;
         }
 
         private void LoadBeatLeaderLeaderBoard()
