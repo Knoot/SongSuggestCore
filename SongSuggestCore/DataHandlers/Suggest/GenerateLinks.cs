@@ -99,6 +99,7 @@ namespace Actions
         private static bool ValidateTargetSong(RankedSongSuggest.DTO data, Top10kScore originSong, Top10kScore suggestedSong)
         {
             SongID suggestedSongID = SongLibrary.StringIDToSongID(suggestedSong.songID, data.suggestSM.LeaderboardSongIDType());
+            if (suggestedSongID.GetSong() == null) return false;
             return suggestedSong.rank != originSong.rank && !data.ignoreSongs.Contains(suggestedSongID);
         }
 
@@ -135,8 +136,11 @@ namespace Actions
         private static bool ValidateOriginSong(RankedSongSuggest.DTO data, Top10kScore originSongCandidate)
         {
             var originSongCandidateID = SongLibrary.StringIDToSongID(originSongCandidate.songID, data.suggestSM.LeaderboardSongIDType());
+            if (originSongCandidateID.GetSong() == null) return false;
+
             //Return false if song is not in the list of songs we are looking for.
             if (!data.originSongIDs.Contains(originSongCandidateID)) return false;
+            if (!data.originSongScoreValue.ContainsKey(originSongCandidateID)) return false;
 
             //**TEST** Keep all links, distance is done later
             return true;
