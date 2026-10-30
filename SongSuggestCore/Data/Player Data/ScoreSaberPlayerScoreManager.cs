@@ -10,7 +10,7 @@ using System.IO;
 
 namespace PlayerScores
 {
-    internal class ScoreSaberPlayerScoreManager : IPlayerScores
+    internal class ScoreSaberPlayerScoreManager : IPlayerScores, BeatLeader.IBeatLeaderScoreSource
     {
         public ActivePlayer ActivePlayer { get; set; }
 
@@ -18,6 +18,12 @@ namespace PlayerScores
         public SongSuggest songSuggest => ActivePlayer.songSuggest;
         private ScoreCollection scoreCollection = new ScoreCollection();
         private List<PlayerScore> playerScores => scoreCollection.PlayerScores;
+        public IEnumerable<PlayerScore> GetBeatLeaderScores(SongID id)
+        {
+            var record = GetPlayerScore(id);
+            return record == null ? Enumerable.Empty<PlayerScore>() : new[] { record };
+        }
+        public bool BeatLeaderScoresCurrent => true;
 
         public void Load()
         {
@@ -183,7 +189,7 @@ namespace PlayerScores
                 case LeaderboardType.AccSaber:
                     return AccSaberCurve.AP(score.Accuracy, song.complexityAccSaber);
                 case LeaderboardType.BeatLeader:
-                    return BeatLeaderCurve.PP(score.Accuracy, song);
+                    return ActivePlayer.BeatLeaderValue(songID, this).Value;
                 case LeaderboardType.AutoBalancer:
                     return AutoBalancerCurve.PP(score.Accuracy, song.complexityAutoBalancer);
                 default:

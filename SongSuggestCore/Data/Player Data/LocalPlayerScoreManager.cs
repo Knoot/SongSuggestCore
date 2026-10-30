@@ -13,13 +13,15 @@ namespace PlayerScores
 {
     //Stores and Handles local recorded scores when active.
     //Saves best score on each song since activation
-    public class LocalPlayerScoreManager : IPlayerScores
+    public class LocalPlayerScoreManager : IPlayerScores, BeatLeader.IBeatLeaderScoreSource
     {
         public ActivePlayer ActivePlayer { get; set; }
         public SongSuggest songSuggest => ActivePlayer.songSuggest;
 
         //Standard Storage for load/save
         private ScoreCollection scoreCollection = new ScoreCollection();
+        public IEnumerable<PlayerScore> GetBeatLeaderScores(SongID id) => groupedScores.TryGetValue(id, out var records) ? records : Enumerable.Empty<PlayerScore>();
+        public bool BeatLeaderScoresCurrent => true;
 
         //Internal Link allowing multiples scores per songID
         private Dictionary<SongID, List<PlayerScore>> groupedScores = new Dictionary<SongID, List<PlayerScore>>();
@@ -40,6 +42,7 @@ namespace PlayerScores
                 TimeSet = DateTime.UtcNow,
                 Accuracy = accuracy,
                 Modifiers = modifiers,
+                ModifiersVerified = true,
             };
 
             //Adds the score to the grouped dataset
@@ -132,7 +135,7 @@ namespace PlayerScores
                 case LeaderboardType.AccSaber:
                     return AccSaberCurve.AP(score.Accuracy, song.complexityAccSaber);
                 case LeaderboardType.BeatLeader:
-                    return BeatLeaderCurve.PP(score.Accuracy, song);
+                    return ActivePlayer.BeatLeaderValue(songID, this).Value;
                 case LeaderboardType.AutoBalancer:
                     return AutoBalancerCurve.PP(score.Accuracy, song.complexityAutoBalancer);
                 default:

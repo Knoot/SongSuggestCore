@@ -17,6 +17,7 @@ namespace Settings
         private string _filesDataPath = $"";
         private string _lastSuggestionsPath = $"";
         private string _rankedData = $"RankedSongs";
+        private string _leaderboardPath = "";
 
 
         private string _basePath;
@@ -36,6 +37,7 @@ namespace Settings
         public string filesDataPath { get => TrailingPath(_filesDataPath); set => _filesDataPath = value; }
         public string lastSuggestionsPath { get => TrailingPath(_lastSuggestionsPath); set => _lastSuggestionsPath = value; }
         public string rankedData { get => TrailingPath(_rankedData); set => _rankedData = value; }
+        public string leaderboardPath { get => TrailingPath(_leaderboardPath); set => _leaderboardPath = value; }
 
 
         private string TrailingPath(string extra)
@@ -62,6 +64,7 @@ namespace Settings
             paths.Add(filesDataPath);
             paths.Add(lastSuggestionsPath);
             paths.Add(rankedData);
+            paths.Add(leaderboardPath);
 
             return paths;
         }

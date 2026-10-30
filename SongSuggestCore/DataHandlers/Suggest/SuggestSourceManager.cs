@@ -19,6 +19,7 @@ namespace Actions
         //Return all the players SongIDs regardless of leaderboard. A recorded score is a recorded score.
         public List<SongID> PlayerScoresIDs()
         {
+            if (leaderboardType == LeaderboardType.BeatLeader) return songSuggest.activePlayer.BeatLeaderRankedIDs();
             return songSuggest.activePlayer.GetRankedScoreIDs()
                 .Where(c => SongLibrary.HasAnySongCategory(c, LeaderboardSongCategory()))
                 .ToList();

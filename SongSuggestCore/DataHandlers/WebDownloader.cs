@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Net;
+using System.IO;
 using ScoreSabersJson;
 using BeatSaverJson;
 using BeatLeaderJson;
@@ -334,18 +335,16 @@ namespace WebDownloading
         }
 
         //Generic web puller for BeatLeader Compact Scores
-        public ScoresCompact GetBeatLeaderScoresCompact(string playerID, int count, int page ,long fromUnixTimeStamp)
+        public virtual ScoresCompact GetBeatLeaderScoresCompact(string playerID, int count, int page ,long fromUnixTimeStamp)
         {
             string webString = "";
             try
             {
-                _BeatLeaderThrottler.Call();
                 //We grab oldest scores first, so updates are performed chronological
                 //https://api.beatleader.com/player/76561197993806676/scores/compact?sortBy=date&order=1&page=1&count=100&time_from=1700000000
                 if (playerID == "-1") return new ScoresCompact();
-                webString = $"https://api.beatleader.com/player/{playerID}/scores/compact?sortBy=pp&order=0&page={page}&count={count}&time_from={fromUnixTimeStamp}";
-                String songInfo = client.DownloadString(webString);
-                return JsonConvert.DeserializeObject<ScoresCompact>(songInfo, serializerSettings);
+                webString = $"https://api.beatleader.com/player/{playerID}/scores/compact?sortBy=date&order=1&page={page}&count={count}&time_from={fromUnixTimeStamp}&leaderboardContext=noMods";
+                return DownloadBeatLeader<ScoresCompact>(webString);
             }
             catch (Exception ex)
             {
@@ -356,7 +355,7 @@ namespace WebDownloading
         }
 
         //BeatLeader last updated Leaderboard Time
-        public long GetBeatLeaderLeaderboardUpdateTime()
+        public virtual long GetBeatLeaderLeaderboardUpdateTime()
         {
             string webString = "";
             try
@@ -398,7 +397,7 @@ namespace WebDownloading
         }
 
         //Beatleader Leaderboard
-        public List<Top10kPlayer> GetBeatLeaderLeaderboard(string mode)
+        public virtual List<Top10kPlayer> GetBeatLeaderLeaderboard(string mode)
         {
             try
             {
@@ -418,16 +417,15 @@ namespace WebDownloading
         }
 
         //Beatleader New Songs
-        public List<BeatLeaderJson.SongSuggestSong> GetBeatLeaderRankedSongs(long unixTimestamp)
+        public virtual List<BeatLeaderJson.SongSuggestSong> GetBeatLeaderRankedSongs(long unixTimestamp)
         {
-            //Original ranked songs are not ranked, so they have no rank time, so to include them we need to use -1
-            if (unixTimestamp == 0) unixTimestamp = -1;
+            // The endpoint returns a complete latest snapshot. The argument is retained for source compatibility.
 
             try
             {
                 _BeatLeaderThrottler.Call();
-                //https://api.beatleader.com/songsuggest/songs?after_time=1600000000
-                String songInfo = client.DownloadString($"https://api.beatleader.com/songsuggest/songs?after_time={unixTimestamp}");
+                //https://api.beatleader.com/songsuggest/songs
+                String songInfo = client.DownloadString("https://api.beatleader.com/songsuggest/songs");
                 return JsonConvert.DeserializeObject<List<BeatLeaderJson.SongSuggestSong>>(songInfo, serializerSettings);
             }
             catch
@@ -435,6 +433,49 @@ namespace WebDownloading
                 songSuggest.log?.WriteLine($"Error receiving Beatleader Songlist past Timestamp: {unixTimestamp}");
             }
             return new List<BeatLeaderJson.SongSuggestSong>();
+        }
+
+        private T DownloadBeatLeader<T>(string url) where T : class
+        {
+            for (int attempt = 0; ; attempt++)
+            {
+                _BeatLeaderThrottler.Call();
+                try
+                {
+                    using (var web = new WebClient())
+                        return JsonConvert.DeserializeObject<T>(web.DownloadString(url), serializerSettings)
+                            ?? throw new InvalidDataException("Null BeatLeader response: " + url);
+                }
+                catch (WebException ex)
+                {
+                    var response = ex.Response as HttpWebResponse;
+                    if (attempt >= 2 || (response != null && (int)response.StatusCode < 500 && (int)response.StatusCode != 429)) throw;
+                    System.Threading.Thread.Sleep(1000 * (attempt + 1));
+                }
+            }
+        }
+
+        public virtual BeatLeader.BeatLeaderMapRating GetBeatLeaderMapRating(string id)
+        {
+            var data = DownloadBeatLeader<Newtonsoft.Json.Linq.JObject>("https://api.beatleader.com/leaderboard/" + Uri.EscapeDataString(id) + "?count=1");
+            var d = data["difficulty"] ?? throw new InvalidDataException("Missing BeatLeader difficulty.");
+            return new BeatLeader.BeatLeaderMapRating {
+                Id = (string)data["id"], Hash = (string)data["song"]?["hash"], Mode = (string)d["modeName"], Difficulty = (string)d["difficultyName"],
+                Status = (int?)d["status"] ?? -1, Stars = (double?)d["stars"], AccRating = (double?)d["accRating"],
+                PassRating = (double?)d["passRating"], TechRating = (double?)d["techRating"], PredictedAcc = (double?)d["predictedAcc"],
+                SliderPercentage = (double?)d["sliderPercentage"], Notes = (int?)d["notes"], NoteSpan = (double?)d["noteSpan"]
+            };
+        }
+
+        public virtual double GetBeatLeaderPp(string id, double accuracy)
+        {
+            var data = DownloadBeatLeader<Newtonsoft.Json.Linq.JObject>("https://api.beatleader.com/pp?leaderboardId=" + Uri.EscapeDataString(id) +
+                "&context=noMods&acc=" + accuracy.ToString("R", System.Globalization.CultureInfo.InvariantCulture));
+            if ((bool?)data["hasPp"] != true || (string)data["leaderboardId"] != id || data["pp"] == null)
+                throw new InvalidDataException("Official PP unavailable: " + id);
+            double pp = (double)data["pp"];
+            if (!Curve.BeatLeaderCurve.IsFinite(pp) || pp < 0) throw new InvalidDataException("Invalid official PP.");
+            return pp;
         }
 
         //Beatleader New Songs

@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
+    <Version>2.4.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
@@ -28,6 +29,7 @@
 
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <EmbeddedResource Include="..\THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md" />
   </ItemGroup>
 
   <Target Name="RunCopyDestinations" AfterTargets="Build">

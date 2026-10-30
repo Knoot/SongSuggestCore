@@ -120,7 +120,6 @@ namespace Actions
         //Creates a playlist with playlist count suggested songs based on the link system.
         public void SuggestedSongs()
         {
-            ActiveRankedSongSuggest = this;
             settings.FilterSettings = settings.FilterSettings ?? new FilterSettings();
             settings.PlaylistSettings = settings.PlaylistSettings ?? new PlaylistSettings();
 
@@ -139,13 +138,18 @@ namespace Actions
             };
 
             //Update player scores to only use local scores if enabled.
-            var currentActiveScoreLocations = songSuggest.activePlayer.ActiveScoreLocations;
+            var currentActiveScoreLocations = new List<ScoreLocation>(songSuggest.activePlayer.ActiveScoreLocations);
+            try
+            {
+            ActiveRankedSongSuggest = this;
             if (useLocalScores)
             {
                 Console.WriteLine("Using Local Scores");
                 songSuggest.activePlayer.ActiveScoreLocations.Clear();
                 songSuggest.activePlayer.ActiveScoreLocations.Add(ScoreLocation.LocalScores);
             }
+            songSuggest.activePlayer.CachedRankings.Clear();
+            if (leaderboard == LeaderboardType.BeatLeader) songSuggest.activePlayer.ValidateBeatLeaderData();
 
             songSuggest.log?.WriteLine("Starting Song Suggest");
 
@@ -195,8 +199,15 @@ namespace Actions
             songSuggest.log?.WriteLine(TimeTaken);
 
             //Restore ActiveScoreLocations if changed to local
-            songSuggest.activePlayer.ActiveScoreLocations = currentActiveScoreLocations;
-            ActiveRankedSongSuggest = null;
+            }
+            finally
+            {
+                songSuggest.activePlayer.ActiveScoreLocations = currentActiveScoreLocations;
+                songSuggest.activePlayer.CachedRankings.Clear();
+                ActiveRankedSongSuggest = null;
+                timer.Stop();
+                timer.Reset();
+            }
 
         }
 
@@ -408,7 +419,7 @@ namespace Actions
             songSuggest.log?.WriteLine($"Style: {modifierStyle} Overweight: {modifierOverweight}");
 
             //Get count of candidates, and remove 1, as index start as 0, so max value is songs-1
-            double totalCandidates = overWeightFilterOrdered.Count() - 1;
+            double totalCandidates = Math.Max(1, overWeightFilterOrdered.Count() - 1);
 
             //We loop either of the 2 filters and record its ordering in a temporary dictionary for quick lookup.
             Dictionary<SongID, int> overweightValues = new Dictionary<SongID, int>();
@@ -476,7 +487,8 @@ namespace Actions
 
             //Ignore recently/all played songs
             //Add either all played songs
-            var playedSongs = suggestSM.PlayerScoresIDs();
+            var playedSongs = leaderboard == LeaderboardType.BeatLeader
+                ? songSuggest.activePlayer.BeatLeaderPlayedIDs() : suggestSM.PlayerScoresIDs();
 
             if (ignoreDays == -1)
             {

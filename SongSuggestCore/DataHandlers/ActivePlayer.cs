@@ -9,7 +9,7 @@ using SongSuggestNS;
 
 namespace ActivePlayerData
 {
-    public class ActivePlayer
+    public partial class ActivePlayer
     {
         public List<ScoreLocation> ActiveScoreLocations { get; set; } = new List<ScoreLocation>();
         internal SongSuggest songSuggest;
@@ -120,6 +120,13 @@ namespace ActivePlayerData
         //Return highest Set Score (pp) of any location
         public double GetRatedScore(SongID songID, LeaderboardType leaderboardType)
         {
+            if (leaderboardType == LeaderboardType.BeatLeader)
+            {
+                var values = ActiveScoreLocations.Select(l => BeatLeaderValue(songID, scores[l])).ToList();
+                if (values.Any(v => v.Status == BeatLeader.BeatLeaderScoreStatus.MissingMetadata))
+                    throw new InvalidOperationException("PPv4 data unavailable for " + songID.GetSong()?.name);
+                return values.Where(v => v.Status == BeatLeader.BeatLeaderScoreStatus.Available).Select(v => v.Value).DefaultIfEmpty(0).Max();
+            }
             if (ActiveScoreLocations.Count == 0) return 0;
             return ActiveScoreLocations.Max(location => scores[location].GetRatedScore(songID, leaderboardType));
         }
@@ -199,7 +206,7 @@ namespace ActivePlayerData
                             .ToList();
                         break;
                     case LeaderboardType.BeatLeader:
-                        scoreIDs = GetRankedLocationScoreIDs(ScoreLocation.BeatLeader);
+                        scoreIDs = BeatLeaderRankedIDs();
                         break;
                 }
                 //reduce song IDs to matching categories, and order by value

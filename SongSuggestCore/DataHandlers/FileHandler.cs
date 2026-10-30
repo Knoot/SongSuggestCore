@@ -63,7 +63,7 @@ namespace FileHandling
         //Save the known Songs in the Library
         public void SaveSongLibrary(List<Song> songLibrary)
         {
-            File.WriteAllText(filePathSettings.songLibraryPath + "SongLibrary.json", JsonConvert.SerializeObject(songLibrary,serializerSettings));
+            BeatLeaderDataset.AtomicWrite(filePathSettings.songLibraryPath + "SongLibrary.json", JsonConvert.SerializeObject(songLibrary,serializerSettings));
         }
 
         //Save a Playlist to a bplist (json format)
@@ -92,7 +92,7 @@ namespace FileHandling
             {
                 Directory.CreateDirectory(directoryPath);
             }
-            File.WriteAllText(fullPath, JsonConvert.SerializeObject(playlist, serializerSettings));
+            BeatLeaderDataset.AtomicWrite(fullPath, JsonConvert.SerializeObject(playlist, serializerSettings));
         }
 
         //Load Players Cached Scores
@@ -103,10 +103,15 @@ namespace FileHandling
             //Collections may be in old format, if that is the case replace them with an empty one.            
             try
             {
-                return JsonConvert.DeserializeObject<ScoreCollection>(loadedString, serializerSettings);
+                return JsonConvert.DeserializeObject<ScoreCollection>(loadedString, serializerSettings) ?? new ScoreCollection();
             }
             catch
             {
+                if (filename.StartsWith("BL", StringComparison.Ordinal))
+                {
+                    songSuggest.log?.WriteLine("Invalid BeatLeader cache retained on disk; a full refresh is required.");
+                    return new ScoreCollection();
+                }
                 songSuggest.log?.WriteLine($"Failed to convert: {filePathSettings.activePlayerDataPath}{filename}. Creating new");
                 SaveScoreCollection(new ScoreCollection(), filename);
                 return new ScoreCollection();
@@ -116,7 +121,7 @@ namespace FileHandling
         //Save Players Cached Scores
         public void SaveScoreCollection(ScoreCollection playerScores, string filename)
         {
-            File.WriteAllText(filePathSettings.activePlayerDataPath + $"{filename}.json", JsonConvert.SerializeObject(playerScores));
+            BeatLeaderDataset.AtomicWrite(filePathSettings.activePlayerDataPath + $"{filename}.json", JsonConvert.SerializeObject(playerScores));
         }
 
         //Load Old Format of Local Scores
@@ -142,7 +147,7 @@ namespace FileHandling
         public void SaveScoreBoard(List<Top10kPlayer> players, string scoreBoardName)
         {
             string fileName = GetScoreBoardPath(scoreBoardName);
-            File.WriteAllText(fileName, JsonConvert.SerializeObject(players));
+            BeatLeaderDataset.AtomicWrite(fileName, JsonConvert.SerializeObject(players));
         }
 
         public List<T> LoadScoreBoard<T>(string scoreBoardName) where T : Top10kPlayer, new()
@@ -168,7 +173,7 @@ namespace FileHandling
         {
             string basePath = scoreBoardName == "Top10KPlayers"
                 ? filePathSettings.top10kPlayersPath
-                : filePathSettings.likedSongsPath;
+                : filePathSettings.leaderboardPath;
 
             return $"{basePath}{scoreBoardName}.json";
         }
@@ -211,7 +216,7 @@ namespace FileHandling
 
         public void SaveFilesMeta(FilesMeta filesData)
         {
-            File.WriteAllText(filePathSettings.filesDataPath + "Files.meta", JsonConvert.SerializeObject(filesData));
+            BeatLeaderDataset.AtomicWrite(filePathSettings.filesDataPath + "Files.meta", JsonConvert.SerializeObject(filesData));
         }
         public List<String> LoadRankedSuggestions()
         {

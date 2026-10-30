@@ -27,6 +27,7 @@ try
     var paths = new FilePathSettings(options.InitialDataDir)
     {
         songLibraryPath = "",
+        leaderboardPath = "",
         top10kPlayersPath = "",
         filesDataPath = "",
         activePlayerDataPath = cacheDir,
@@ -39,6 +40,7 @@ try
 
     var core = new SongSuggest(new CoreSettings
     {
+        Log = Console.Out,
         FilePathSettings = paths,
         UserID = "-1",
         UseScoreSaberLeaderboard = false,
@@ -51,6 +53,7 @@ try
         LoadRuntimeDataOnInitialize = false,
         MaxWebRequests = options.MaxWebRequests
     });
+    bool ppv4Upgrade = options.UpdateBeatLeader && core.BeatLeaderData.Manifest == null;
 
     if (options.UpdateScoreSaberSongs)
     {
@@ -64,9 +67,11 @@ try
         refresh.ComparativeBestTop10kPlayerDataPuller(ref fullInfoPlayers, options.LargeTop10kUpdate);
     }
 
+    if (options.UpdateBeatLeader) core.RefreshBeatLeaderData(options.ForceBeatLeader);
+
     core.RefreshInitialData(
         updateScoreSaberSongs: false,
-        updateBeatLeader: options.UpdateBeatLeader,
+        updateBeatLeader: false,
         updateAccSaber: options.UpdateAccSaber,
         updateBeatSaverMetadata: options.UpdateBeatSaverMetadata,
         onlyMissingBeatSaverMetadata: options.OnlyMissingBeatSaverMetadata,
@@ -74,7 +79,7 @@ try
 
     if (options.BumpSongLibraryVersion)
     {
-        InitialDataToolHelpers.BumpVersion(core, FilesMetaType.SongLibraryVersion, options.LargeSongLibraryUpdate);
+        InitialDataToolHelpers.BumpVersion(core, FilesMetaType.SongLibraryVersion, options.LargeSongLibraryUpdate || ppv4Upgrade);
     }
 
     Console.WriteLine("InitialData update completed.");
@@ -104,6 +109,7 @@ internal sealed class InitialDataToolOptions
     public bool UpdateScoreSaberSongs { get; private set; }
     public bool UpdateScoreSaberTop10k { get; private set; }
     public bool UpdateBeatLeader { get; private set; }
+    public bool ForceBeatLeader { get; private set; }
     public bool UpdateAccSaber { get; private set; }
     public bool UpdateBeatSaverMetadata { get; private set; }
     public bool OnlyMissingBeatSaverMetadata { get; private set; } = true;
@@ -144,6 +150,9 @@ internal sealed class InitialDataToolOptions
                     break;
                 case "--beatleader":
                     options.UpdateBeatLeader = true;
+                    break;
+                case "--force-beatleader":
+                    options.UpdateBeatLeader = options.ForceBeatLeader = true;
                     break;
                 case "--accsaber":
                     options.UpdateAccSaber = true;
@@ -196,6 +205,7 @@ Options:
   --bump-song-library-version  Bump minor songLibraryVersion without refreshing data.
   --large-song-library-update  Bump major songLibraryVersion for song data updates. Default is minor.
   --beatleader                 Refresh BeatLeader leaderboard and SongLibrary.json data.
+  --force-beatleader           Rebuild the entire PPv4 dataset, ignoring pending metadata checkpoints.
   --accsaber                   Refresh AccSaber leaderboard and SongLibrary.json data.
   --beatsaver-metadata         Refresh BeatSaver beatSaverID/njs/nps/seconds metadata.
   --beatsaver-all              Refresh all BeatSaver metadata, not only missing rows.

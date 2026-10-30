@@ -19,12 +19,12 @@ using ScoreSabersJson;
 
 namespace SongSuggestNS
 {
-    public class SongSuggest
+    public partial class SongSuggest
     {
         //Static Version Info based on a SemVer.
         private static int _semVerMajor = 2;
-        private static int _semVerMinor = 3;
-        private static int _semVerPatch = 17;
+        private static int _semVerMinor = 4;
+        private static int _semVerPatch = 0;
 
         //2.3.10: Fix crash when last suggest lists a song that has been deranked. (null reference return on the ID from SongLibrary)
         //2.3.11: Add AccSaberReloaded leaderboard sync.
@@ -38,7 +38,7 @@ namespace SongSuggestNS
         //2.3.X: Include handling of modifiers for different leaderboards vs score locations
 
         public static Version GetCoreVersion() { return new Version(_semVerMajor, _semVerMinor, _semVerPatch); }
-        public static Version MinimumUIVersion() { return new Version(2, 0, 0); }
+        public static Version MinimumUIVersion() { return new Version(2, 2, 0); }
 
         public double songSuggestCompletion { get => songSuggest?.songSuggestCompletion ?? 1; }
         public static SongSuggest MainInstance { get; set; }
@@ -58,7 +58,6 @@ namespace SongSuggestNS
         public Top10kPlayers beatLeaderScoreBoard { get; set; }
         public Top10kPlayers autoBalancerScoreBoard { get; set; }
 
-        private bool removeScoreSaberOnlyScoresFromBeatLeaderLeaderBoard = false;
 
         //Last used Song Evaluation is stored here if the UI wants to use them for further information than just creation of the playlists
         public RankedSongSuggest songSuggest { get; private set; } = null;
@@ -90,11 +89,13 @@ namespace SongSuggestNS
             fileHandler = new FileHandler { songSuggest = this, filePathSettings = CoreSettings.FilePathSettings };
             //Create any missing paths
             fileHandler.CreatePaths();
+            BeatLeaderData = new BeatLeaderDataset(this);
+            BeatLeaderData.Load();
 
             webDownloader = new WebDownloader { songSuggest = this };
             if (CoreSettings.MaxWebRequests) webDownloader.FullThrottle();
 
-            filesMeta = fileHandler.LoadFilesMeta();
+            filesMeta = fileHandler.LoadFilesMeta() ?? new FilesMeta();
 
             status = "Checking loaded data for new Online Files";
 
@@ -244,18 +245,24 @@ namespace SongSuggestNS
                     UpdateBeatLeaderCacheFiles();
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                log?.WriteLine("Dataset update failed; previous complete data retained: " + ex.Message);
             }
         }
 
         public void SetUserID(string userID)
         {
-            CoreSettings.UserID = userID;
+            lock (operationLock) CoreSettings.UserID = userID;
         }
 
         public void GenerateSongSuggestions(SongSuggestSettings settings)
         {
+            lock (operationLock)
+            {
+            LastOperationError = null;
+            try
+            {
             CoreSettings.UserID = settings.PlayerID;
             RefreshActivePlayer();
 
@@ -269,7 +276,10 @@ namespace SongSuggestNS
 
             lastSuggestions.SetSuggestions(songSuggest.sortedSuggestions);
 
-            status = "Ready";
+            }
+            catch (Exception ex) { LastOperationError = ex.Message; throw; }
+            finally { status = "Ready"; }
+            }
         }
 
         public void ClearSongSuggestions()
@@ -279,13 +289,21 @@ namespace SongSuggestNS
 
         public void GenerateOldestSongs(OldAndNewSettings settings)
         {
+            lock (operationLock)
+            {
+            LastOperationError = null;
+            try
+            {
             //Refresh Player Data
             CoreSettings.UserID = settings.scoreSaberID;
             RefreshActivePlayer();
 
             oldestSongs = new OldAndNew(this);
             oldestSongs.GeneratePlaylist(settings);
-            status = "Ready";
+            }
+            catch (Exception ex) { LastOperationError = ex.Message; throw; }
+            finally { status = "Ready"; }
+            }
         }
 
         public void ClearOldestSongs()
@@ -307,15 +325,21 @@ namespace SongSuggestNS
 
         public void AddLocalScore(SongID songID, double accuracy, string modifiers)
         {
+            lock (operationLock)
+            {
             //log?.WriteLine($"Local Score Modifiers: {modifiers}");
             localScores.AddScore(songID, accuracy, modifiers);
             if (localScores.updated) localScores.Save();
+            }
         }
 
         public void AddSessionScore(SongID songID, double accuracy, string modifiers)
         {
+            lock (operationLock)
+            {
             //log?.WriteLine($"Session Score Modifiers: {modifiers}");
             sessionScores.AddScore(songID, accuracy, modifiers);
+            }
         }
 
         //Makes sure the active players data is updated (Load Cache, Reset Cache if needed, Download new data from web).
@@ -489,7 +513,7 @@ namespace SongSuggestNS
         //Clears the stored cache files
         public void ClearUser()
         {
-            activePlayer.ClearCache();
+            lock (operationLock) activePlayer.ClearCache();
         }
 
         public String SongCategoryText(String lookup)
@@ -519,6 +543,7 @@ namespace SongSuggestNS
             //As the web version does not know the date of other external sources, we set those values to the current known in the web cache (local dates are correct)
             //Note song library is downloaded, so its Songs updated is the correct time version of what is in it.
             cacheFilesWebVersion.beatLeaderLeaderboardUpdated = diskVersion.beatLeaderLeaderboardUpdated;
+            cacheFilesWebVersion.accSaberLeaderboardUpdated = diskVersion.accSaberLeaderboardUpdated;
 
             //Perform checks if anything needs updating
             //PlayerCache needs update, if the format has changed, or there is a new major update of the 10k data.
@@ -602,22 +627,7 @@ namespace SongSuggestNS
 
         public void UpdateBeatLeaderCacheFiles()
         {
-            log?.WriteLine("Starting to load BeatLeader data");
-
-            //Get time of latest update to Leaderboard data.
-            long lastUpdate = webDownloader.GetBeatLeaderLeaderboardUpdateTime();
-
-            DateTime lastUpdateDateTime = DateTimeOffset.FromUnixTimeSeconds(lastUpdate).DateTime;
-            log?.WriteLine($"Beat Leader Web Update Time. Unix: {lastUpdate} Time: {lastUpdateDateTime:d}");
-
-            //Updates the leaderboard if needed.
-            if (filesMeta.beatLeaderLeaderboardUpdated < lastUpdate)
-            {
-                log?.WriteLine("Pulling new Leaderboard data");
-                RefreshBeatLeaderLeaderBoard();
-                filesMeta.beatLeaderLeaderboardUpdated = lastUpdate;
-                fileHandler.SaveFilesMeta(filesMeta);
-            }
+            BeatLeaderData.Refresh();
         }
 
         public void RefreshInitialData(
@@ -784,50 +794,7 @@ namespace SongSuggestNS
 
         private void LoadBeatLeaderLeaderBoard()
         {
-            //Loads player and scoreboard data, as well as updates the SongLibrary if changes was made.
-
-            log?.WriteLine($"Songs Updated: {filesMeta.beatLeaderSongsUpdated} Leaderboard Updated: {filesMeta.beatLeaderLeaderboardUpdated} ");
-
-            //Update Song Library to match Scoreboard if needed.
-            if (filesMeta.beatLeaderSongsUpdated != filesMeta.beatLeaderLeaderboardUpdated)
-            {
-                //Clear Song Library of current BeatLeader songs
-                var currentSongs = songLibrary.GetAllRankedSongIDs(SongCategory.BeatLeader).Select(c => c.GetSong());
-                foreach (Song song in currentSongs)
-                {
-                    songLibrary.RemoveSongCategory(song, SongCategory.BeatLeader);
-                    song.starBeatLeader = 0;
-                    song.starAccBeatLeader = 0;
-                    song.starPassBeatLeader = 0;
-                    song.starTechBeatLeader = 0;
-                    song.beatLeaderID = null;
-                }
-
-                var songs = webDownloader.GetBeatLeaderRankedSongs(filesMeta.beatLeaderLeaderboardUpdated);
-                var standardSongs = songs
-                    .Where(c => c.mode == "Standard" || c.mode == "OneSaber")
-                    .ToList();
-
-                foreach (var song in standardSongs)
-                {
-                    songLibrary.UpsertSong(song);
-                }
-                //Record the update time and save the file to disk.
-                songLibrary.Save();
-                filesMeta.beatLeaderSongsUpdated = filesMeta.beatLeaderLeaderboardUpdated;
-                fileHandler.SaveFilesMeta(filesMeta);
-            }
-
-            //Load the Leaderboard
-            var leaderboard = new Top10kPlayers();
-            leaderboard.FormatName = "Beat Leader";
-            leaderboard.songSuggest = this;
-            leaderboard.Load("BeatLeaderLeaderboard");
-            beatLeaderScoreBoard = leaderboard;
-
-            //If the loaderboard still needs the onetime filtering perform this.
-            if (removeScoreSaberOnlyScoresFromBeatLeaderLeaderBoard) RemoveScoreSaberOnlyScoresFromBeatLeaderLeaderBoard();
-
+            ApplyBeatLeaderDataset();
         }
 
         //Update SongCategories and Complexity rating on Acc Saber songs in the SongLibrary.
@@ -893,12 +860,13 @@ namespace SongSuggestNS
                 songLibrary.AddSongCategory(songObject, category);
                 songObject.complexityAccSaber = song.complexity;
                 songObject.name = song.songName;
-                songObject.scoreSaberID = song.ssLeaderboardId;
-                songObject.beatLeaderID = song.blLeaderboardId;
+                if (string.IsNullOrEmpty(songObject.scoreSaberID)) songObject.scoreSaberID = song.ssLeaderboardId;
+                if (string.IsNullOrEmpty(songObject.beatLeaderID)) songObject.beatLeaderID = song.blLeaderboardId;
             }
 
             //Save Updated Library
             songLibrary.Save();
+            songLibrary.ResetLibraryLinks();
             filesMeta.accSaberSongsUpdated = filesMeta.accSaberLeaderboardUpdated;
             fileHandler.SaveFilesMeta(filesMeta);
         }
@@ -953,58 +921,6 @@ namespace SongSuggestNS
             CreateComparativeBestLeaderboardEvenMapDistribution(accSaberPlayerList, "AccSaberLeaderboardData");
         }
 
-        //Downloads newest Leaderboard
-        private void RefreshBeatLeaderLeaderBoard()
-        {
-            //var beatLeaderPlayerList = webDownloader.GetBeatLeaderLeaderboard();
-            var beatLeaderPlayerList = webDownloader.GetBeatLeaderLeaderboard("noMods");
-
-            //Pruning of recieved data. Hopefully this is temporary and filtering can be moved to server side.
-            //Removal of mismatching players
-            log?.WriteLine($"--- Check For Large Spread ---");
-            int totalSpread = 0;
-            var toRemove = new List<Top10kPlayer>();
-
-            foreach (var player in beatLeaderPlayerList)
-            {
-                double diff = player.top10kScore.Last().pp / player.top10kScore.First().pp;
-                if (diff < 0.7)
-                {
-                    totalSpread++;
-                    Console.WriteLine($"Player:{player.name}({player.id}) Rank: {player.rank} Diff: {diff}");
-                    toRemove.Add(player);
-                }
-            }
-
-            log?.WriteLine($"Large Spread: {totalSpread}");
-            log?.WriteLine();
-
-            log?.WriteLine($"--- Check For Few Scores ---");
-            int fewScores = 0;
-            long targetPoint = ((DateTimeOffset)DateTime.UtcNow.AddYears(-1)).ToUnixTimeSeconds();
-            foreach (var player in beatLeaderPlayerList)
-            {
-                if (player.top10kScore.Count < 30)//20)
-                {
-                    fewScores++;
-                    Console.WriteLine($"Player:{player.name}({player.id}) Rank: {player.rank} Scores: {player.top10kScore.Count}");
-                    toRemove.Add(player);
-                }
-            }
-            log?.WriteLine($"Few Scores: {fewScores}");
-
-            log?.WriteLine();
-
-            beatLeaderPlayerList = beatLeaderPlayerList.Except(toRemove).ToList();
-
-            //We cannot perform these action until we have loaded the Song Library, which is after we update the files, so we mark this for later when we can do this.
-            if (CoreSettings.FilterScoreSaberBiasInBeatLeader) removeScoreSaberOnlyScoresFromBeatLeaderLeaderBoard = true;
-
-            //Save the pruned file
-            //CreateComparativeBestLeaderboard(beatLeaderPlayerList, "BeatLeaderLeaderboard");
-            CreateComparativeBestLeaderboardEvenMapDistribution(beatLeaderPlayerList, "BeatLeaderLeaderboard");
-            //fileHandler.SaveScoreBoard(beatLeaderPlayerList, "BeatLeaderLeaderboard");
-        }
 
         //Goes through a list of downloaded playerscores with their best 30 scores, and reduce it to the top 20 comparative best scores in the batch, and saves them on disk.
         //This should make searching these scores provide more maps (any map played in top 30 will be in the list, as it the 100% best score on that map), and the data
