@@ -67,10 +67,13 @@ namespace Data
 
         public void Refresh(bool force = false)
         {
+            core.status = "Checking BeatLeader data version";
             long revision = core.webDownloader.GetBeatLeaderLeaderboardUpdateTime();
             if (revision <= 0) throw new IOException("BeatLeader snapshot revision unavailable.");
             if (!force && Load() && Manifest.Revision == revision) return;
+            core.status = "Downloading BeatLeader map list";
             var songs = core.webDownloader.GetBeatLeaderRankedSongs(0).Where(s => s.mode == "Standard" || s.mode == "OneSaber").ToList();
+            core.status = "Downloading BeatLeader leaderboard";
             var players = core.webDownloader.GetBeatLeaderLeaderboard(Context);
             if (songs.Count == 0 || players.Count == 0) throw new IOException("Empty BeatLeader snapshot; existing dataset preserved.");
             var ratings = new Dictionary<string, BeatLeaderMapRating>();
@@ -80,29 +83,58 @@ namespace Data
                 try
                 {
                     var pending = JsonConvert.DeserializeObject<PendingRatings>(File.ReadAllText(pendingPath));
-                    if (pending?.Revision == revision && pending.Model == BeatLeaderCurve.ModelVersion && pending.Ratings != null)
+                    if (pending?.Revision == revision && pending.Model == BeatLeaderCurve.ModelVersion && pending.Completed && pending.Ratings != null)
                         ratings = pending.Ratings;
                 }
                 catch (JsonException) { }
             }
-            int count = 0;
-            foreach (var song in songs)
+            // Only complete checkpoints can bypass pagination; partial ones restart at page one
+            // so a changed ordering cannot hide skipped or duplicated records.
+            if (songs.Any(s => !ratings.TryGetValue(s.id, out var r) || !Matches(s, r)))
             {
-                if (!ratings.TryGetValue(song.id, out var rating) || !Matches(song, rating))
+                ratings = new Dictionary<string, BeatLeaderMapRating>();
+                var expectedSongs = songs.ToDictionary(s => s.id);
+                var seen = new HashSet<string>();
+                const int pageSize = 100;
+                int total = -1;
+                for (int page = 1; ; page++)
                 {
-                    rating = core.webDownloader.GetBeatLeaderMapRating(song.id);
-                    if (!Matches(song, rating)) throw new IOException("Cannot use BeatLeader map " + song.id + ": " + DescribeMismatch(song, rating));
-                    ratings[song.id] = rating;
-                }
-                count++;
-                if (count % 20 == 0 || count == songs.Count)
-                {
+                    core.status = total > 0
+                        ? $"PPv4 metadata: page {page}/{(total + pageSize - 1) / pageSize} ({100 * seen.Count / total}%)"
+                        : "Downloading PPv4 metadata: page 1";
+                    var batch = core.webDownloader.GetBeatLeaderMapRatingsPage(page, pageSize);
+                    if (batch == null || batch.Page != page || batch.ItemsPerPage != pageSize || batch.Total <= 0 ||
+                        (total >= 0 && total != batch.Total) || batch.Ratings == null)
+                        throw new InvalidDataException("Invalid or changing BeatLeader metadata pagination.");
+                    total = batch.Total;
+                    if (batch.Ratings.Count != Math.Min(pageSize, total - seen.Count))
+                        throw new InvalidDataException("Incomplete BeatLeader metadata page " + page);
+                    foreach (var rating in batch.Ratings)
+                    {
+                        if (rating == null || string.IsNullOrEmpty(rating.Id) || !seen.Add(rating.Id))
+                            throw new InvalidDataException("Duplicate or missing BeatLeader metadata ID on page " + page);
+                        if (!expectedSongs.TryGetValue(rating.Id, out var song)) continue;
+                        if (!Matches(song, rating)) throw new IOException("Cannot use BeatLeader map " + song.id + ": " + DescribeMismatch(song, rating));
+                        ratings.Add(rating.Id, rating);
+                    }
                     AtomicWrite(pendingPath, JsonConvert.SerializeObject(new PendingRatings { Revision = revision, Model = BeatLeaderCurve.ModelVersion, Ratings = ratings }));
-                    core.status = $"PPv4 map metadata: {count}/{songs.Count}";
+                    core.status = $"PPv4 metadata: page {page}/{(total + pageSize - 1) / pageSize} ({100 * seen.Count / total}%)\n{ratings.Count}/{songs.Count} difficulties";
                     core.log?.WriteLine(core.status);
+                    if (seen.Count == total) break;
                 }
+                var missing = songs.Where(s => !ratings.ContainsKey(s.id)).ToList();
+                if (missing.Count > 5) throw new InvalidDataException("BeatLeader metadata coverage missing " + missing.Count + " maps; refusing mass single-map fallback.");
+                foreach (var song in missing)
+                {
+                    var rating = core.webDownloader.GetBeatLeaderMapRating(song.id);
+                    if (!Matches(song, rating)) throw new IOException("Cannot use BeatLeader map " + song.id + ": " + DescribeMismatch(song, rating));
+                    ratings.Add(song.id, rating);
+                }
+                AtomicWrite(pendingPath, JsonConvert.SerializeObject(new PendingRatings { Revision = revision, Model = BeatLeaderCurve.ModelVersion, Ratings = ratings, Completed = true }));
             }
+            ratings = songs.ToDictionary(s => s.id, s => ratings[s.id]);
             if (core.webDownloader.GetBeatLeaderLeaderboardUpdateTime() != revision) throw new IOException("BeatLeader snapshot changed during refresh. Retry.");
+            core.status = "Validating BeatLeader PPv4 data";
             Validate(songs, players, ratings);
             // Verify the deployed calculation before marking this snapshot as compatible with our model.
             foreach (var rating in ratings.Values.OrderBy(r => r.Stars).Where((r, i) => i % Math.Max(1, ratings.Count / 5) == 0).Take(5))
@@ -112,6 +144,7 @@ namespace Data
                 if (Math.Abs(actual - expected) > Math.Max(0.01, expected * 0.0001))
                     throw new IOException("Official PPv4 calculation mismatch for " + rating.Id);
             }
+            core.status = "Saving BeatLeader data";
             Commit(songs, players, ratings, revision);
         }
 
@@ -190,6 +223,7 @@ namespace Data
         {
             public long Revision { get; set; }
             public string Model { get; set; }
+            public bool Completed { get; set; }
             public Dictionary<string, BeatLeaderMapRating> Ratings { get; set; }
         }
     }

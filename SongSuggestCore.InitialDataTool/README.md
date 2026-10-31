@@ -51,12 +51,23 @@ dotnet run --project .\SongSuggestCore\SongSuggestCore.InitialDataTool -- `
   --beatleader --large-song-library-update
 ```
 
-This downloads the noMods population and complete per-map PPv4 inputs. The first
-run can take tens of minutes. Progress is logged as `PPv4 map metadata: N/total`.
-Pending metadata is checkpointed every 20 maps for the same server revision;
-repeat the same command after a network failure. `--force-beatleader` discards
-checkpoint reuse and rebuilds everything. A changed server revision requires a
-new consistent snapshot; never override a snapshot/rating mismatch.
+This downloads the noMods population and complete PPv4 inputs using ranked
+leaderboard pages of 100 difficulties (about 40 requests for 3968 difficulties,
+instead of one request per difficulty). Progress includes the page number.
+Page numbers, totals, lengths, duplicate IDs, required inputs and snapshot ratings
+are validated before commit. At most five missing difficulties may use individual
+requests; a larger gap aborts the update instead of starting a mass fallback.
+Pending metadata is saved after each page. An interrupted partial traversal restarts
+at page one to avoid skipping records if ordering changed; a fully traversed
+checkpoint can be reused for the same server revision. Old partial checkpoints
+are not reused. `--force-beatleader` rebuilds everything. A changed server revision
+requires a new consistent snapshot; never override a snapshot/rating mismatch.
+
+The game client runs the existing update during background initialization, no
+earlier than 10 seconds after SmartSongSuggest initialization starts. It still
+applies the update in that launch; there is no next-session activation rule.
+The Unity main thread does not wait on the delay, but SmartSongSuggest readiness
+still waits for initialization. This delay does not apply to InitialDataTool.
 
 The persistent output contains `BeatLeaderDataset.meta` and immutable generations
 in `BeatLeaderData/<generation>/` (ratings, population, and source songs). The

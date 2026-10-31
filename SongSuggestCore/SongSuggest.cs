@@ -43,7 +43,12 @@ namespace SongSuggestNS
         public double songSuggestCompletion { get => songSuggest?.songSuggestCompletion ?? 1; }
         public static SongSuggest MainInstance { get; set; }
         public static TextWriter Log { get; set; }
-        public String status { get; set; } = "Uninitialized";
+        private string currentStatus = "Uninitialized";
+        public string status
+        {
+            get => currentStatus;
+            set { currentStatus = value; CoreSettings?.StatusChanged?.Invoke(value); }
+        }
         public ActivePlayer activePlayer { get; set; }
         //Default as an unset player. Place ID here and next RefreshActivePlayer() updates it.
         public String activePlayerID => CoreSettings.UserID;
@@ -82,6 +87,7 @@ namespace SongSuggestNS
         //Initialising based on the _coreSettings.
         private void Initialize()
         {
+            var startupTimer = System.Diagnostics.Stopwatch.StartNew();
             //Enable Log
             Log = CoreSettings.Log;
             log?.WriteLine("Log Enabled in Constructor");
@@ -89,6 +95,7 @@ namespace SongSuggestNS
             fileHandler = new FileHandler { songSuggest = this, filePathSettings = CoreSettings.FilePathSettings };
             //Create any missing paths
             fileHandler.CreatePaths();
+            status = "Loading local BeatLeader data";
             BeatLeaderData = new BeatLeaderDataset(this);
             BeatLeaderData.Load();
 
@@ -100,13 +107,14 @@ namespace SongSuggestNS
             status = "Checking loaded data for new Online Files";
 
             //Validate file versions and checks for new data.
-            if (CoreSettings.ValidateCacheFilesOnInitialize) ValidateCacheFiles();
+            if (CoreSettings.ValidateCacheFilesOnInitialize) ValidateCacheFiles(startupTimer);
 
             //Load data from disk.
 
             //Load Song Library from File and make it the global lookup if this is the primary instance
             songLibrary = new SongLibraryInstance { songSuggest = this };
             if (SongSuggest.MainInstance == this) songLibrary.SetActive();
+            status = "Loading song library";
             songLibrary.SetLibrary(fileHandler.LoadSongLibrary());
 
             //Update Song Library
@@ -221,7 +229,7 @@ namespace SongSuggestNS
         }
 
         //Validate CacheFiles and download new versions if available.
-        private void ValidateCacheFiles()
+        private void ValidateCacheFiles(System.Diagnostics.Stopwatch startupTimer)
         {
             //Try and perform the update, if it fails, ohh well we try next time. Suggestions quality do not drop with a missed update.
             try
@@ -230,18 +238,27 @@ namespace SongSuggestNS
                 //Performs all GIT updates including Song Library, so disabling this will also disable those checks.
                 if (CoreSettings.UpdateScoreSaberLeaderboard)
                 {
+                    status = "Checking ScoreSaber data";
                     UpdateScoreSaberCacheFiles();
                 }
 
                 //Perform AccSaber Updates if active
                 if (CoreSettings.UpdateAccSaberLeaderboard)
                 {
+                    status = "Checking AccSaber data";
                     UpdateAccSaberCacheFiles();
                 }
 
                 //Perform Beatleader Updates if active (May update the filesmeta version for its data if needed, so this is done after check with GIT data).
                 if (CoreSettings.UpdateBeatLeaderLeaderboard)
                 {
+                    var remaining = CoreSettings.BeatLeaderStartupCheckDelay - startupTimer.Elapsed;
+                    while (remaining > TimeSpan.Zero)
+                    {
+                        status = $"BeatLeader check in {Math.Ceiling(remaining.TotalSeconds):0}s";
+                        System.Threading.Thread.Sleep(TimeSpan.FromMilliseconds(Math.Min(1000, remaining.TotalMilliseconds)));
+                        remaining = CoreSettings.BeatLeaderStartupCheckDelay - startupTimer.Elapsed;
+                    }
                     UpdateBeatLeaderCacheFiles();
                 }
             }

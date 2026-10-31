@@ -29,6 +29,12 @@ BeatLeaderMapRating Rating(JToken fixture)
 foreach (var fixture in fixtures)
 {
     var r = Rating(fixture);
+    var parsed = WebDownloading.WebDownloader.ParseBeatLeaderMapRatingsPage(new JObject {
+        ["metadata"] = new JObject { ["page"] = 1, ["itemsPerPage"] = 100, ["total"] = 1 },
+        ["data"] = new JArray(fixture["Leaderboard"]!.DeepClone())
+    });
+    Check(parsed.Ratings.Single().IsComplete && parsed.Ratings[0].NoteSpan == r.NoteSpan &&
+        parsed.Ratings[0].SliderPercentage == r.SliderPercentage, "Batch DTO lost PPv4 fields");
     Check(r.IsComplete, "Incomplete fixture " + r.Id);
     foreach (var pp in fixture["Predictions"]!)
     {
@@ -69,11 +75,18 @@ Directory.CreateDirectory(root);
 try
 {
     SongSuggest.MainInstance = null;
+    var initializationStatuses = new List<string>();
     var core = new SongSuggest(new CoreSettings { FilePathSettings = new FilePathSettings(root), UserID = "-1",
+        StatusChanged = initializationStatuses.Add,
         UseBeatLeaderLeaderboard = false, UpdateBeatLeaderLeaderboard = false, UseAccSaberLeaderboard = false, UpdateAccSaberLeaderboard = false,
         UseScoreSaberLeaderboard = false, UpdateScoreSaberLeaderboard = false, LoadRuntimeDataOnInitialize = false, ValidateCacheFilesOnInitialize = false });
+    Check(initializationStatuses.Contains("Loading local BeatLeader data") && initializationStatuses.Contains("Loading song library") &&
+        initializationStatuses.Last() == "Ready", "Initialization stages were not published before constructor completion");
     if (args.Contains("--live"))
     {
+        var batch = core.webDownloader.GetBeatLeaderMapRatingsPage(1, 100);
+        Check(batch.Page == 1 && batch.ItemsPerPage == 100 && batch.Ratings.Count == Math.Min(100, batch.Total) &&
+            batch.Ratings.All(m => m.IsComplete), "Live batch metadata contract");
         var compact = core.webDownloader.GetBeatLeaderScoresCompact("3225556157461414", 1, 1, 0);
         Check(compact.metadata?.page == 1 && compact.data?.Count == 1 && BeatLeaderModifiers.IsNoMods(compact.data[0].score.modifiers), "Live noMods compact score contract");
         foreach (var fixture in fixtures)
@@ -179,11 +192,36 @@ try
     transport.Revision = 124; transport.Players = new List<Top10kPlayer>();
     Throws(() => core.BeatLeaderData.Refresh(true), "Empty population accepted");
     transport.Players = players;
-    core.BeatLeaderData.Refresh(true);
-    Check(core.BeatLeaderData.Manifest.Revision == 124 && new BeatLeaderDataset(core).Load(), "Successful refresh did not commit");
-    int calls = transport.MapCalls;
+    transport.ExtraMaps = 100;
+    foreach (string fault in new[] { "short", "duplicate", "page", "total", "empty", "missing-field" })
+    {
+        transport.PageFault = fault;
+        Throws(() => core.BeatLeaderData.Refresh(true), "Invalid batch accepted: " + fault);
+        Check(core.BeatLeaderData.Manifest.Generation == generationBeforeFailure, "Invalid batch replaced dataset");
+    }
+    transport.PageFault = null;
+    transport.FailPage = 2;
+    Throws(() => core.BeatLeaderData.Refresh(true), "Failed second page committed");
+    transport.FailPage = 0;
+    int retryPages = transport.PageCalls;
     core.BeatLeaderData.Refresh();
-    Check(transport.MapCalls == calls, "Unchanged dataset redownloaded map metadata");
+    Check(transport.PageCalls - retryPages == 2, "Incomplete checkpoint skipped pagination on retry");
+    transport.OmitMaps = 6;
+    int singles = transport.MapCalls;
+    Throws(() => core.BeatLeaderData.Refresh(true), "Mass single-map fallback accepted");
+    Check(transport.MapCalls == singles, "Mass fallback issued individual requests");
+    transport.OmitMaps = 1;
+    core.BeatLeaderData.Refresh(true);
+    Check(transport.MapCalls == singles + 1, "Missing single map was not recovered");
+    transport.OmitMaps = 0;
+    singles = transport.MapCalls;
+    int pagesBefore = transport.PageCalls;
+    core.BeatLeaderData.Refresh(true);
+    Check(transport.MapCalls == singles && transport.PageCalls - pagesBefore == 2, "Full refresh did not use two batch pages");
+    Check(core.BeatLeaderData.Manifest.Revision == 124 && new BeatLeaderDataset(core).Load(), "Successful refresh did not commit");
+    int calls = transport.PageCalls;
+    core.BeatLeaderData.Refresh();
+    Check(transport.PageCalls == calls, "Unchanged dataset redownloaded map metadata");
 
     SongSuggest.MainInstance = null;
     var runtime = new SongSuggest(new CoreSettings { FilePathSettings = new FilePathSettings(root), UserID = "-1",
@@ -229,6 +267,11 @@ sealed class FakeBeatLeaderDownloader : WebDownloading.WebDownloader
     public bool ChangeRevision;
     public string? FailMap;
     public int MapCalls;
+    public int PageCalls;
+    public int ExtraMaps;
+    public int OmitMaps;
+    public int FailPage;
+    public string? PageFault;
     public List<SongSuggestSong> Songs = new();
     public List<Top10kPlayer> Players = new();
     public Dictionary<string, BeatLeaderMapRating> Ratings = new();
@@ -245,6 +288,32 @@ sealed class FakeBeatLeaderDownloader : WebDownloading.WebDownloader
         MapCalls++;
         if (id == FailMap) throw new IOException("Simulated metadata failure");
         return Ratings[id];
+    }
+    public override BeatLeaderMapRatingsPage GetBeatLeaderMapRatingsPage(int page, int count)
+    {
+        PageCalls++;
+        if (page == FailPage) throw new IOException("Simulated page failure");
+        var maps = Ratings.Values.Skip(OmitMaps).ToList();
+        for (int i = 0; i < ExtraMaps; i++)
+        {
+            var extra = JsonConvert.DeserializeObject<BeatLeaderMapRating>(JsonConvert.SerializeObject(Ratings.Values.First()))!;
+            extra.Id = "outside-snapshot" + i;
+            maps.Add(extra);
+        }
+        var result = new BeatLeaderMapRatingsPage { Page = page, ItemsPerPage = count, Total = maps.Count,
+            Ratings = maps.Skip((page - 1) * count).Take(count).ToList() };
+        if (result.Ratings.Any(m => m.Id == FailMap)) throw new IOException("Simulated batch failure");
+        if (PageFault == "short") result.Ratings.RemoveAt(0);
+        if (PageFault == "empty") result.Ratings.Clear();
+        if (PageFault == "page") result.Page++;
+        if (PageFault == "total" && page == 2) result.Total++;
+        if (PageFault == "duplicate" && page == 2) result.Ratings[0] = maps[0];
+        if (PageFault == "missing-field")
+        {
+            var invalid = JsonConvert.DeserializeObject<BeatLeaderMapRating>(JsonConvert.SerializeObject(result.Ratings[0]))!;
+            invalid.NoteSpan = null; result.Ratings[0] = invalid;
+        }
+        return result;
     }
     public override double GetBeatLeaderPp(string id, double accuracy) => BeatLeaderCurve.PP(accuracy, Ratings[id]);
 }

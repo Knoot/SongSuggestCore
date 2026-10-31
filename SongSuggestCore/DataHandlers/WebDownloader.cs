@@ -10,6 +10,7 @@ using Newtonsoft.Json;
 using SongSuggestNS;
 using Data;
 using System.Collections.Generic;
+using System.Linq;
 using SongLibraryNS;
 using LinkedData;
 using System.Text;
@@ -458,6 +459,30 @@ namespace WebDownloading
         public virtual BeatLeader.BeatLeaderMapRating GetBeatLeaderMapRating(string id)
         {
             var data = DownloadBeatLeader<Newtonsoft.Json.Linq.JObject>("https://api.beatleader.com/leaderboard/" + Uri.EscapeDataString(id) + "?count=1");
+            return ParseBeatLeaderMapRating(data);
+        }
+
+        public virtual BeatLeader.BeatLeaderMapRatingsPage GetBeatLeaderMapRatingsPage(int page, int count)
+        {
+            if (page < 1 || count < 1 || count > 100) throw new ArgumentOutOfRangeException();
+            var data = DownloadBeatLeader<JObject>($"https://api.beatleader.com/leaderboards?type=ranked&count={count}&page={page}");
+            return ParseBeatLeaderMapRatingsPage(data);
+        }
+
+        public static BeatLeader.BeatLeaderMapRatingsPage ParseBeatLeaderMapRatingsPage(JObject data)
+        {
+            var metadata = data["metadata"] ?? throw new InvalidDataException("Missing BeatLeader page metadata.");
+            var items = data["data"] as JArray ?? throw new InvalidDataException("Missing BeatLeader page data.");
+            return new BeatLeader.BeatLeaderMapRatingsPage {
+                Page = (int?)metadata["page"] ?? throw new InvalidDataException("Missing BeatLeader page number."),
+                ItemsPerPage = (int?)metadata["itemsPerPage"] ?? throw new InvalidDataException("Missing BeatLeader page size."),
+                Total = (int?)metadata["total"] ?? throw new InvalidDataException("Missing BeatLeader page total."),
+                Ratings = items.Select(ParseBeatLeaderMapRating).ToList()
+            };
+        }
+
+        public static BeatLeader.BeatLeaderMapRating ParseBeatLeaderMapRating(JToken data)
+        {
             var d = data["difficulty"] ?? throw new InvalidDataException("Missing BeatLeader difficulty.");
             return new BeatLeader.BeatLeaderMapRating {
                 Id = (string)data["id"], Hash = (string)data["song"]?["hash"], Mode = (string)d["modeName"], Difficulty = (string)d["difficultyName"],

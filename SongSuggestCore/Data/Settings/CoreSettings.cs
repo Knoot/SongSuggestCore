@@ -13,6 +13,10 @@ namespace Settings
         public bool UpdateAccSaberLeaderboard { get; set; } = true;
         public bool UseBeatLeaderLeaderboard { get; set; } = true;
         public bool UpdateBeatLeaderLeaderboard { get; set; } = true;
+        // Startup only; callers such as the game client must initialize Core on a worker thread.
+        public System.TimeSpan BeatLeaderStartupCheckDelay { get; set; } = System.TimeSpan.Zero;
+        // Called on the thread performing the operation; UI clients should only publish the text here.
+        public System.Action<string> StatusChanged { get; set; }
         //Removes plays with Score Saber shared songs only in the Beat Leader score data.
         public bool FilterScoreSaberBiasInBeatLeader { get; set; } = true;
         //Allows a client to increase web requests to limits, should only be used if not using other web requests during run.
