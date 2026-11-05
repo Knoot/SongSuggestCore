@@ -10,25 +10,25 @@ namespace Curve
     // Adapted from BeatLeader RatingAPI / website; see THIRD-PARTY-NOTICES.md.
     public static class BeatLeaderCurve
     {
-        public const string ModelVersion = "ppv4-2026-10-27";
+        public const string ModelVersion = "ppv4.1-2026-11-05";
         private static readonly ConcurrentDictionary<string, double[][]> Curves = new ConcurrentDictionary<string, double[][]>();
         private static readonly double[][] Base = {
-            new[]{0.0,0.0}, new[]{0.6,0.307}, new[]{0.65,0.355}, new[]{0.7,0.414},
-            new[]{0.75,0.485}, new[]{0.8,0.568}, new[]{0.825,0.605}, new[]{0.85,0.649},
-            new[]{0.875,0.699}, new[]{0.9,0.753}, new[]{0.91,0.781}, new[]{0.92,0.813},
-            new[]{0.93,0.867}, new[]{0.94,0.931}, new[]{0.95,1.0}, new[]{0.955,1.039},
+            new[]{0.0,0.0}, new[]{0.6,0.297}, new[]{0.65,0.343}, new[]{0.7,0.4},
+            new[]{0.75,0.469}, new[]{0.8,0.549}, new[]{0.825,0.584}, new[]{0.85,0.627},
+            new[]{0.875,0.675}, new[]{0.9,0.727}, new[]{0.91,0.76}, new[]{0.92,0.804},
+            new[]{0.93,0.861}, new[]{0.94,0.926}, new[]{0.95,1.0}, new[]{0.955,1.039},
             new[]{0.96,1.094}, new[]{0.965,1.167}, new[]{0.97,1.256}, new[]{0.9725,1.315},
             new[]{0.975,1.392}, new[]{0.9775,1.49}, new[]{0.98,1.618}, new[]{0.9825,1.786},
             new[]{0.985,2.007}, new[]{0.9875,2.303}, new[]{0.99,2.7}, new[]{0.9925,3.241},
-            new[]{0.995,4.01}, new[]{0.9975,5.158}, new[]{0.999,6.241}, new[]{1.0,7.424}
+            new[]{0.995,4.01}, new[]{0.9975,5.158}, new[]{0.999,6.241}, new[]{1.0,7.2}
         };
         // predictedAcc, A, C, K, W, K2, P2
         private static readonly double[][] Rows = {
             new[]{0.955,1.0,-5.3,4.86,0.6,2.88,2.46}, new[]{0.96,0.99,-3.0,4.3,0.66,4.8,1.85},
             new[]{0.965,0.988,-2.4,4.5,0.64,4.5,1.95}, new[]{0.97,0.986,-2.2,4.7,0.62,4.2,2.05},
-            new[]{0.975,0.985,-1.8,4.86,0.6,3.8,2.15}, new[]{0.98,0.985,-1.4,4.86,0.6,3.35,2.3},
-            new[]{0.985,0.985,-1.2,4.86,0.6,2.88,2.46}, new[]{0.99,0.9915,-1.2,4.86,0.6,2.88,2.46},
-            new[]{0.995,0.9915,-1.2,4.86,0.6,2.88,2.46}
+            new[]{0.975,0.983,0.0,4.86,0.6,3.8,2.15}, new[]{0.98,0.983,0.0,4.86,0.6,3.35,2.3},
+            new[]{0.985,0.985,-0.6,4.86,0.6,2.88,2.46}, new[]{0.99,0.99,0.0,4.86,0.6,2.88,2.46},
+            new[]{0.995,0.99,0.0,4.86,0.6,2.88,2.46}
         };
         private static readonly double[] Slopes = BuildSlopes();
         public static bool IsFinite(double n) => !double.IsNaN(n) && !double.IsInfinity(n);
@@ -41,26 +41,65 @@ namespace Curve
             if (accuracy == 0) return 0;
             var curve = Curves.GetOrAdd(r.CurveKey, _ => BuildCurve(r));
             if (Curves.Count > 5000) Curves.Clear();
-            double value = Interpolate(accuracy, curve), at96 = Interpolate(0.96, curve), power = CurvePower(r.Stars.Value);
+            double stars = Stars(r, curve);
+            double value = Interpolate(accuracy, curve), at96 = Interpolate(0.96, curve), power = CurvePower(stars);
             if (value > 0 && at96 > 0 && power != 1) value = at96 * Math.Pow(value / at96, power);
-            double pass = r.PassRating.Value;
-            if (pass > 13) pass = 13 + (pass - 13) * 0.5;
-            double passPp = Math.Max(0, 12.3 * Math.Exp(0.85966 * Math.Pow(pass, 1.0 / 2.62)) - 30);
-            double accPp = value * 21.584 * Math.Pow(r.AccRating.Value, 1.2163);
-            double tech = r.TechRating.Value;
-            if (tech > 12) tech = 12 + (tech - 12) * 0.33;
-            double techPp = Math.Exp(3.5 * accuracy) * 0.1612 * Math.Pow(tech, 1.2477);
-            double bonus = r.Stars.Value >= 8.6454 ? 1 : 1 + 0.0063371 * Math.Pow(8.6454 - Math.Max(r.Stars.Value, 0), 1.36);
-            double result = 1.023 * (passPp + accPp + techPp) * bonus;
+            double passPp = PassPp(r.PassRating.Value) * PassAccMultiplier(accuracy, r.PredictedAcc.Value);
+            double accPp = value * 34.519 * r.AccRating.Value * MidStarTopMultiplier(stars, accuracy, r.PredictedAcc.Value);
+            double result = 1.0128 * (passPp + accPp + TechPp(r.TechRating.Value)) * LowStarMultiplier(stars);
             if (!IsFinite(result)) throw new InvalidOperationException("Non-finite PPv4 result.");
             return result;
         }
 
         private static double CurvePower(double stars)
         {
-            if (stars < 4.803) return stars <= 2.8818 ? 1.08 : 1.08 - 0.08 * (stars - 2.8818) / (4.803 - 2.8818);
-            if (stars <= 6.7242) return 1;
-            return stars < 9.606 ? 1 - 0.1 * (stars - 6.7242) / (9.606 - 6.7242) : 0.9;
+            if (stars < 5.3718) return stars <= 3.478 ? 1.08 : 1.08 - 0.08 * (stars - 3.478) / (5.3718 - 3.478);
+            if (stars <= 7.1529) return 1;
+            return stars < 9.6894 ? 1 - 0.1 * (stars - 7.1529) / (9.6894 - 7.1529) : 0.9;
+        }
+
+        public static double Stars(BeatLeaderMapRating r)
+        {
+            if (r == null || !r.IsComplete) throw new InvalidOperationException("Incomplete BeatLeader PPv4.1 metadata.");
+            return Stars(r, BuildCurve(r));
+        }
+
+        private static double Stars(BeatLeaderMapRating r, double[][] curve)
+        {
+            // Stars use the unbonused 96% parts, then solve the implicit low-star bonus.
+            // The mid-star score bonus is deliberately excluded from this calculation.
+            double basis = (PassPp(r.PassRating.Value) * PassAccMultiplier(0.96, r.PredictedAcc.Value) +
+                Interpolate(0.96, curve) * 34.519 * r.AccRating.Value + TechPp(r.TechRating.Value)) / 52;
+            if (basis <= 0 || basis >= 8.8584) return basis;
+            double lo = basis, hi = 8.8584;
+            while (hi - lo > 1e-6)
+            {
+                double mid = (lo + hi) / 2;
+                if (mid < basis * LowStarMultiplier(mid)) lo = mid; else hi = mid;
+            }
+            return (lo + hi) / 2;
+        }
+
+        private static double PassPp(double pass)
+        {
+            if (pass > 13) pass = 13 + (pass - 13) * 0.5;
+            return Math.Max(0, 12.3 * Math.Exp(0.85966 * Math.Pow(pass, 1.0 / 2.62)) - 30);
+        }
+
+        private static double PassAccMultiplier(double accuracy, double predicted) => predicted <= 0 ? 1 :
+            Clamp(Math.Exp(6 * (accuracy - (predicted - (1 - predicted)))), 0.8, 3);
+
+        private static double TechPp(double tech) => 5.7887 * (tech > 6.2754 ? 6.2754 + (tech - 6.2754) * 0.7 : tech);
+        private static double LowStarMultiplier(double stars) => stars >= 8.8584 ? 1 :
+            1 + 0.007593 * Math.Pow(8.8584 - Math.Max(stars, 0), 1.98);
+        private static double Ease(double value) { double t = Clamp(value, 0, 1); return t * t * (3 - 2 * t); }
+
+        private static double MidStarTopMultiplier(double stars, double accuracy, double predicted)
+        {
+            if (predicted <= 0 || stars <= 4.2508 || stars >= 10.5 || accuracy <= predicted - 0.03) return 1;
+            double bump = stars < 6.3762 ? Ease((stars - 4.2508) / (6.3762 - 4.2508)) :
+                stars > 8 ? Ease((10.5 - stars) / (10.5 - 8)) : 1;
+            return 1 + 0.05 * bump * Ease((accuracy - (predicted - 0.03)) / 0.03);
         }
 
         private static double[] Params(double predicted)
@@ -102,7 +141,7 @@ namespace Curve
             bool dynamic = predicted > 0.6 && predicted < 0.9995;
             bool modified = dynamic && !(p[1] >= 0.9995 && p[3] == 4.86 && p[4] == 0.6 && p[5] == 2.88 && p[6] == 2.46);
             double tilt = dynamic ? 0.2 * r.SliderPercentage.Value : 0;
-            double nerf = Factor(r.Notes.Value, 115, 20, 0.95) * Factor(r.NoteSpan.Value, 75, 12, 0.9);
+            double nerf = Factor(r.Notes.Value, 115, 20, 0.8031) * Factor(r.NoteSpan.Value, 75, 12, 0.9);
             if (!modified && tilt == 0) return Base.Select(v => new[] { v[0], v[1] * nerf }).ToArray();
             var xs = new HashSet<double>(Base.Select(v => v[0]));
             for (int i = 0; i < 71; i++) xs.Add(Math.Round(0.6 + i * 0.005, 6));
@@ -113,8 +152,15 @@ namespace Curve
                 double value = Interpolate(x, Base);
                 if (modified)
                 {
-                    double smooth = Smooth(x), reference = Modified(x, standard);
-                    value = Math.Min(smooth, reference > 0 ? smooth * Modified(x, p) / reference : smooth);
+                    double factor = TableFactor(x, standard);
+                    if (p[1] < 0.9995 && x > p[1])
+                    {
+                        const double h = 1e-5;
+                        double atA = TableFactor(p[1], standard);
+                        factor = atA + (atA - TableFactor(p[1] - h, standard)) / h * (x - p[1]);
+                    }
+                    double smooth = Smooth(x);
+                    value = Math.Min(smooth, factor > 0 ? Modified(x, p) * factor : smooth);
                 }
                 value *= Math.Exp(tilt * Clamp(x - predicted, -0.015, 0.015) * 100);
                 return new[] { x, value * nerf };
@@ -123,6 +169,12 @@ namespace Curve
 
         private static double Factor(double n, double start, double reference, double minimum) =>
             n <= 0 || n >= start ? 1 : Clamp(1 - (1 - minimum) * Math.Log(start / n) / Math.Log(start / reference), minimum, 1);
+
+        private static double TableFactor(double x, double[] standard)
+        {
+            double reference = Modified(x, standard);
+            return reference > 0 ? Smooth(x) / reference : 0;
+        }
 
         private static double Interpolate(double x, double[][] points)
         {

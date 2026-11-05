@@ -1,10 +1,10 @@
 # BeatLeader PPv4
 
 The no-modifier PPv4 mathematics in `SongSuggestCore/Data/Curve/BeatLeaderCurve.cs`
-is adapted from BeatLeader RatingAPI (revision
-`e9d49b085aec25f0e91959de2219daec912260e2`, `Pp/PpFormula.cs`,
+is adapted from BeatLeader RatingAPI PPv4.1 (revision
+`48cc07c61dd57a99d872c20b3df9085ffe9ba494`, `Pp/PpFormula.cs`,
 `Pp/PpCalculator.cs`, `Controllers/Curve.cs`) and the equivalent website
-implementation (`6950ac73ef912ad5c0b08071f723238666ec572d`,
+implementation (`12415e959374f1813120fd67b9889ee3054e715e`,
 `src/utils/beatleader/rebalanced-pp.js`). Adaptations target .NET Standard 2.0,
 use double precision, and omit unsupported leaderboard contexts and modifiers.
 

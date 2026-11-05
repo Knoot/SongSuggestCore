@@ -503,6 +503,10 @@ namespace WebDownloading
             return pp;
         }
 
+        public virtual ScoresCompact GetBeatLeaderPopulationScores(string playerId) =>
+            DownloadBeatLeader<ScoresCompact>("https://api.beatleader.com/player/" + Uri.EscapeDataString(playerId) +
+                "/scores/compact?sortBy=pp&order=desc&count=100&page=1&leaderboardContext=noMods");
+
         //Beatleader New Songs
         public BeatLeaderJson.ClanMembersList GetBeatLeaderClanMembers(string clanTag, int page, int count, bool primary)
         {

@@ -41,7 +41,15 @@ dotnet run --project .\SongSuggestCore\SongSuggestCore.InitialDataTool -- `
 
 Use `--large-top10k-update` with `--scoresaber-top10k` when the refreshed top-player data should bump the major `top10kVersion` and `songLibraryVersion`.
 
-## BeatLeader PPv4
+## BeatLeader PPv4.1
+
+Core 2.5.0 / UI 2.3.0 use model `ppv4.1-2026-11-05`, pinned to RatingAPI
+`48cc07c61dd57a99d872c20b3df9085ffe9ba494` and website
+`12415e959374f1813120fd67b9889ee3054e715e`. The October PPv4 model is obsolete;
+updating only the ratings without updating Core is not compatible.
+The model change rejects old dataset manifests and pending checkpoints even if
+their server timestamp matches. Old BL user PP requires a successful full refresh;
+Local accuracy, modifiers and dates, and SS/Acc caches are preserved.
 
 Run once before packaging the PPv4 release:
 
@@ -76,8 +84,14 @@ manifest is committed last and contains SHA-256 hashes. A derived
 algorithm. These files are no longer stored in the tool's temporary directory.
 Do not copy only Files.meta or only the ratings file. The release script packages
 the manifest and its complete generation and refuses missing/corrupt PPv4 data.
+Before commit, the updater compares computed stars and official PP on reference
+maps and samples top/middle/bottom supported population profiles. Each sampled
+profile must contain unchanged results agreeing with its snapshot, and its live
+results must agree with the local formula. Improvements after the snapshot are
+allowed, but no matching reference results aborts the update. This is a sample
+check, not a full audit of every population score.
 
-The first successful PPv4 export automatically uses a major song-library bump.
+The first successful export of a new PP model automatically uses a major song-library bump.
 Later runs use the requested normal version policy. This does not refresh
 ScoreSaber Top10K or change its version.
 
@@ -109,3 +123,16 @@ The numerical tolerance is max(0.01 PP, official PP * 0.0001). Tests also exerci
 offline Local/Session scoring, cache transactions, timestamps and file integrity.
 Live production parity, a complete dataset export and in-game smoke tests are
 separate release gates, not replaced by the offline suite.
+
+The active fixtures are `Fixtures/ppv41-official.json`: eight maps including
+OneSaber, 72 official values at 0/90/95/96/97/98/99/99.5/100%, with capture times
+and pinned source revisions. The October `ppv4-official.json` and
+`ppv4-slider-noise.json` remain historical references, not current expectations.
+Refresh fixtures only against a verified compatible production formula:
+
+```powershell
+dotnet run --project .\SongSuggestCore\SongSuggestCore.Tests -c Release -- `
+  --capture-fixtures .\SongSuggestCore\SongSuggestCore.Tests\Fixtures\ppv41-official.json
+```
+
+The recorder refuses formula/API differences and rating changes during capture.

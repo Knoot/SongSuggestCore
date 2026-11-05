@@ -13,10 +13,14 @@ using SongLibraryNS;
 using SongSuggestNS;
 
 int checks = 0;
+if (args.Length == 2 && args[0] == "--capture-fixtures")
+{
+    CaptureFixtures.Run(args[1]);
+    return;
+}
 void Check(bool condition, string message) { checks++; if (!condition) throw new Exception(message); }
 void Throws(Action action, string message) { bool failed = false; try { action(); } catch { failed = true; } Check(failed, message); }
-var fixtures = JArray.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "ppv4-official.json")));
-foreach (var item in JArray.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "ppv4-slider-noise.json")))) fixtures.Add(item);
+var fixtures = JArray.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "ppv41-official.json")));
 BeatLeaderMapRating Rating(JToken fixture)
 {
     var lb = fixture["Leaderboard"]!; var d = lb["difficulty"]!;
@@ -29,6 +33,8 @@ BeatLeaderMapRating Rating(JToken fixture)
 foreach (var fixture in fixtures)
 {
     var r = Rating(fixture);
+    Check((string?)fixture["ModelVersion"] == BeatLeaderCurve.ModelVersion, "Fixture belongs to another model");
+    Check(Math.Abs(BeatLeaderCurve.Stars(r) - r.Stars!.Value) < 0.001, "Official stars mismatch " + r.Id);
     var parsed = WebDownloading.WebDownloader.ParseBeatLeaderMapRatingsPage(new JObject {
         ["metadata"] = new JObject { ["page"] = 1, ["itemsPerPage"] = 100, ["total"] = 1 },
         ["data"] = new JArray(fixture["Leaderboard"]!.DeepClone())
@@ -40,7 +46,7 @@ foreach (var fixture in fixtures)
     {
         double expected = (double)pp["pp"]!, accuracy = (double)pp["accuracy"]!;
         double actual = BeatLeaderCurve.PP(accuracy, r);
-        Console.WriteLine($"{r.Id} {accuracy:P0}: local={actual:F6}, official={expected:F6}");
+        Console.WriteLine($"{r.Id} {accuracy:P1}: local={actual:F6}, official={expected:F6}");
         Check(Math.Abs(expected - actual) <= Math.Max(0.01, expected * 1e-4), "Official PP mismatch " + r.Id);
     }
     Check(BeatLeaderCurve.PP(0, r) == 0 && double.IsFinite(BeatLeaderCurve.PP(1, r)), "Endpoints");
@@ -67,6 +73,22 @@ foreach (double span in new[] { 12.0, 40, 74.999, 75, 75.001 })
     {
         double pp = BeatLeaderCurve.PP(accuracy, map);
         Check(double.IsFinite(pp) && pp >= prev, "Boundary curve is not finite/monotonic"); prev = pp;
+    }
+}
+
+foreach (double stars in new[] { 3.478, 4.2508, 5.3718, 6.3762, 7.1529, 8, 8.8584, 9.6894, 10.5 })
+foreach (double side in new[] { -1e-6, 0, 1e-6 })
+{
+    var map = Rating(fixtures[0]);
+    map.PassRating = map.TechRating = 0;
+    double lo = 0, hi = 100;
+    for (int i = 0; i < 50; i++) { map.AccRating = (lo + hi) / 2; if (BeatLeaderCurve.Stars(map) < stars + side) lo = map.AccRating.Value; else hi = map.AccRating.Value; }
+    double previous = 0;
+    foreach (double a in new[] { 0.90, map.PredictedAcc!.Value - 0.030001, map.PredictedAcc.Value - 0.03,
+        map.PredictedAcc.Value - 0.029999, 0.97, 0.98, 0.99, 0.995, 1 }.OrderBy(a => a))
+    {
+        double value = BeatLeaderCurve.PP(a, map);
+        Check(double.IsFinite(value) && value >= previous, "Star/bonus boundary not monotonic"); previous = value;
     }
 }
 
@@ -123,10 +145,30 @@ try
         passRating = (float)noisyRating.PassRating!, techRating = (float)noisyRating.TechRating! });
     core.BeatLeaderData.Commit(datasetSongs, players, datasetRatings, 123);
     Check(new BeatLeaderDataset(core).Load(), "Manifest round trip");
+    string manifestPath = Path.Combine(root, "BeatLeaderDataset.meta");
+    string currentManifest = File.ReadAllText(manifestPath);
+    var legacyManifest = JObject.Parse(currentManifest);
+    legacyManifest["PpModelVersion"] = "ppv4-2026-10-27";
+    File.WriteAllText(manifestPath, legacyManifest.ToString());
+    Check(!new BeatLeaderDataset(core).Load(), "Old model with same server revision accepted");
+    legacyManifest["Revision"] = long.MaxValue;
+    File.WriteAllText(manifestPath, legacyManifest.ToString());
+    Check(!new BeatLeaderDataset(core).Load(), "Old model with newer timestamp accepted");
+    File.WriteAllText(manifestPath, currentManifest);
     var id = core.songLibrary.UpsertSong(songDto);
     var song = id.GetSong();
     core.activePlayer = new ActivePlayer("test", core);
     core.activePlayer.Load();
+    var obsoleteBlScores = new ScoreCollection { ScoresMeta = new ScoresMeta { FormatVersion = "1.0",
+        PpModelVersion = "ppv4-2026-10-27", LeaderboardContext = BeatLeaderDataset.Context,
+        DataVersion = core.BeatLeaderData.Revision, CompletedWatermark = 9999, LastSuccessfulFullRefresh = DateTime.UtcNow } };
+    core.fileHandler.SaveScoreCollection(obsoleteBlScores, "BLtest");
+    string obsoleteBlBytes = File.ReadAllText(Path.Combine(root, "Players", "BLtest.json"));
+    var blManager = new BeatLeaderPlayerScoreManager { ActivePlayer = core.activePlayer };
+    blManager.Load();
+    Check(!blManager.BeatLeaderScoresCurrent, "Legacy cached PP accepted for current revision");
+    blManager.Save();
+    Check(File.ReadAllText(Path.Combine(root, "Players", "BLtest.json")) == obsoleteBlBytes, "Invalid legacy cache overwritten before full refresh");
     core.activePlayer.ActiveScoreLocations.Add(ScoreLocation.SessionScores);
     core.AddSessionScore(id, 0.973123, "");
     core.activePlayer.ValidateBeatLeaderData();
@@ -172,6 +214,19 @@ try
     Check(new BeatLeaderDataset(core).Load(), "Bad commit damaged valid generation");
     var transport = new FakeBeatLeaderDownloader { Revision = 124, Songs = datasetSongs, Players = players, Ratings = datasetRatings, FailMap = "fixture5" };
     core.webDownloader = transport;
+    blManager.Refresh();
+    Check(transport.UserFrom == 0 && blManager.BeatLeaderScoresCurrent, "Model migration did not perform a full user refresh");
+    var migratedScores = core.fileHandler.LoadScoreCollection("BLtest");
+    Check(migratedScores.PlayerScores.Count == 1 && migratedScores.ScoresMeta.PpModelVersion == BeatLeaderCurve.ModelVersion &&
+        migratedScores.ScoresMeta.LastSuccessfulFullRefresh.HasValue, "Full migration did not store the new model");
+    blManager.Refresh();
+    Check(transport.UserFrom == 99 && blManager.BeatLeaderScoresCurrent, "Migrated cache was not refreshed incrementally");
+    string completeUserCache = File.ReadAllText(Path.Combine(root, "Players", "BLtest.json"));
+    transport.FailUserRefresh = true;
+    blManager.Refresh();
+    Check(blManager.BeatLeaderScoresCurrent && File.ReadAllText(Path.Combine(root, "Players", "BLtest.json")) == completeUserCache,
+        "Failed user refresh replaced the last complete cache");
+    transport.FailUserRefresh = false;
     string generationBeforeFailure = core.BeatLeaderData.Manifest.Generation;
     Throws(() => core.BeatLeaderData.Refresh(true), "Failed metadata refresh committed");
     Check(core.BeatLeaderData.Manifest.Generation == generationBeforeFailure && new BeatLeaderDataset(core).Load(), "Failed refresh damaged manifest");
@@ -193,6 +248,21 @@ try
     Throws(() => core.BeatLeaderData.Refresh(true), "Empty population accepted");
     transport.Players = players;
     transport.ExtraMaps = 100;
+    foreach (bool stale in new[] { true, false })
+    {
+        transport.StalePopulation = stale; transport.InvalidLivePp = !stale;
+        Throws(() => core.BeatLeaderData.Refresh(true), "Mixed-model population committed");
+        Check(core.BeatLeaderData.Manifest.Generation == generationBeforeFailure, "Population failure damaged current generation");
+    }
+    transport.StalePopulation = transport.InvalidLivePp = false;
+    File.WriteAllText(Path.Combine(root, "BeatLeaderPendingRatings.json"), JsonConvert.SerializeObject(new {
+        Revision = transport.Revision, Model = "ppv4-2026-10-27", Completed = true, Ratings = datasetRatings
+    }));
+    int pagesBeforeLegacyCheckpoint = transport.PageCalls;
+    core.BeatLeaderData.Refresh();
+    Check(transport.PageCalls - pagesBeforeLegacyCheckpoint == 2, "Legacy complete checkpoint reused for a new model");
+    generationBeforeFailure = core.BeatLeaderData.Manifest.Generation;
+    transport.Revision++;
     foreach (string fault in new[] { "short", "duplicate", "page", "total", "empty", "missing-field" })
     {
         transport.PageFault = fault;
@@ -218,7 +288,7 @@ try
     int pagesBefore = transport.PageCalls;
     core.BeatLeaderData.Refresh(true);
     Check(transport.MapCalls == singles && transport.PageCalls - pagesBefore == 2, "Full refresh did not use two batch pages");
-    Check(core.BeatLeaderData.Manifest.Revision == 124 && new BeatLeaderDataset(core).Load(), "Successful refresh did not commit");
+    Check(core.BeatLeaderData.Manifest.Revision == transport.Revision && new BeatLeaderDataset(core).Load(), "Successful refresh did not commit");
     int calls = transport.PageCalls;
     core.BeatLeaderData.Refresh();
     Check(transport.PageCalls == calls, "Unchanged dataset redownloaded map metadata");
@@ -272,6 +342,10 @@ sealed class FakeBeatLeaderDownloader : WebDownloading.WebDownloader
     public int OmitMaps;
     public int FailPage;
     public string? PageFault;
+    public bool StalePopulation;
+    public bool InvalidLivePp;
+    public bool FailUserRefresh;
+    public long UserFrom;
     public List<SongSuggestSong> Songs = new();
     public List<Top10kPlayer> Players = new();
     public Dictionary<string, BeatLeaderMapRating> Ratings = new();
@@ -316,4 +390,23 @@ sealed class FakeBeatLeaderDownloader : WebDownloading.WebDownloader
         return result;
     }
     public override double GetBeatLeaderPp(string id, double accuracy) => BeatLeaderCurve.PP(accuracy, Ratings[id]);
+    public override ScoresCompact GetBeatLeaderScoresCompact(string playerID, int count, int page, long fromUnixTimeStamp)
+    {
+        UserFrom = fromUnixTimeStamp;
+        if (FailUserRefresh) return new ScoresCompact();
+        var rating = Ratings.Values.First();
+        return new ScoresCompact { metadata = new Metadata { page = page, total = 1, itemsPerPage = count },
+            data = new List<DataItem> { new DataItem { leaderboard = new LeaderboardCompact { id = rating.Id },
+                score = new BeatLeaderJson.Score { accuracy = 0.97f, pp = (float)BeatLeaderCurve.PP(0.97f, rating), epochTime = 101, modifiers = "" } } } };
+    }
+    public override ScoresCompact GetBeatLeaderPopulationScores(string playerId) => new ScoresCompact {
+        metadata = new Metadata { page = 1, itemsPerPage = 100, total = Players.Single(p => p.id == playerId).top10kScore.Count },
+        data = Players.Single(p => p.id == playerId).top10kScore.Select(s => {
+            double lo = 0, hi = 1;
+            for (int i = 0; i < 60; i++) { double mid = (lo + hi) / 2; if (BeatLeaderCurve.PP(mid, Ratings[s.songID]) < s.pp) lo = mid; else hi = mid; }
+            double accuracy = (lo + hi) / 2 + (StalePopulation ? 0.001 : 0);
+            return new DataItem { leaderboard = new LeaderboardCompact { id = s.songID },
+                score = new BeatLeaderJson.Score { accuracy = (float)accuracy, pp = (float)BeatLeaderCurve.PP(accuracy, Ratings[s.songID]) + (InvalidLivePp ? 10 : 0), modifiers = "" } };
+        }).ToList()
+    };
 }

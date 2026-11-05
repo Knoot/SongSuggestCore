@@ -139,13 +139,43 @@ namespace Data
             // Verify the deployed calculation before marking this snapshot as compatible with our model.
             foreach (var rating in ratings.Values.OrderBy(r => r.Stars).Where((r, i) => i % Math.Max(1, ratings.Count / 5) == 0).Take(5))
             {
+                if (Math.Abs(BeatLeaderCurve.Stars(rating) - rating.Stars.Value) > 0.001)
+                    throw new IOException("Official PPv4.1 star calculation mismatch for " + rating.Id);
                 double expected = core.webDownloader.GetBeatLeaderPp(rating.Id, 0.97);
                 double actual = BeatLeaderCurve.PP(0.97, rating);
                 if (Math.Abs(actual - expected) > Math.Max(0.01, expected * 0.0001))
                     throw new IOException("Official PPv4 calculation mismatch for " + rating.Id);
             }
+            core.status = "Validating BeatLeader population PP";
+            ValidatePopulationPp(players, ratings);
+            if (core.webDownloader.GetBeatLeaderLeaderboardUpdateTime() != revision)
+                throw new IOException("BeatLeader snapshot changed during validation. Retry.");
             core.status = "Saving BeatLeader data";
             Commit(songs, players, ratings, revision);
+        }
+
+        private void ValidatePopulationPp(List<Top10kPlayer> players, Dictionary<string, BeatLeaderMapRating> ratings)
+        {
+            var supported = players.Where(p => p.top10kScore.Any(s => ratings.ContainsKey(s.songID))).OrderBy(p => p.rank).ToList();
+            foreach (var player in new[] { supported[0], supported[supported.Count / 2], supported[supported.Count - 1] }.Distinct())
+            {
+                var live = core.webDownloader.GetBeatLeaderPopulationScores(player.id);
+                if (live?.metadata?.page != 1 || live.data == null || live.data.Count == 0)
+                    throw new IOException("BeatLeader population validation unavailable for " + player.id);
+                int matched = 0;
+                foreach (var score in player.top10kScore.Where(s => ratings.ContainsKey(s.songID)))
+                {
+                    var current = live.data.FirstOrDefault(s => s?.leaderboard?.id == score.songID)?.score;
+                    if (current == null || !BeatLeaderModifiers.IsNoMods(current.modifiers)) continue;
+                    double local = BeatLeaderCurve.PP(current.accuracy, ratings[score.songID]);
+                    double tolerance = Math.Max(0.01, current.pp * 0.0001);
+                    if (!BeatLeaderCurve.IsFinite(current.pp) || current.pp <= 0 || Math.Abs(local - current.pp) > tolerance)
+                        throw new IOException("BeatLeader live population PP disagrees with the model for " + score.songID);
+                    // A player may improve after the snapshot; require unchanged reference results too.
+                    if (Math.Abs(score.pp - current.pp) <= tolerance) matched++;
+                }
+                if (matched == 0) throw new IOException("BeatLeader snapshot population is stale or has no unchanged reference results for " + player.id);
+            }
         }
 
         public void Commit(List<SongSuggestSong> songs, List<Top10kPlayer> players, Dictionary<string, BeatLeaderMapRating> ratings, long revision)
