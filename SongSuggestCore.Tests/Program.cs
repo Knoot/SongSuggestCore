@@ -21,6 +21,7 @@ if (args.Length == 2 && args[0] == "--capture-fixtures")
 void Check(bool condition, string message) { checks++; if (!condition) throw new Exception(message); }
 void Throws(Action action, string message) { bool failed = false; try { action(); } catch { failed = true; } Check(failed, message); }
 var fixtures = JArray.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "ppv41-official.json")));
+CacheRecoveryTests.Run(Check, Throws);
 BeatLeaderMapRating Rating(JToken fixture)
 {
     var lb = fixture["Leaderboard"]!; var d = lb["difficulty"]!;
@@ -324,6 +325,26 @@ try
     runtime.GenerateSongSuggestions(request);
     Check(runtime.songSuggest.songSuggestIDs.Count == 3 && runtime.LastOperationError == null, "Retry failed");
 
+    var beforeCorruption = core.BeatLeaderData.Manifest;
+    string manifestBeforeCorruption = File.ReadAllText(manifestPath);
+    foreach (string name in beforeCorruption.Hashes.Keys)
+    {
+        string path = Path.Combine(root, "BeatLeaderData", beforeCorruption.Generation, name);
+        File.WriteAllText(path, new string('\0', 1024));
+    }
+    Check(!new BeatLeaderDataset(core).Load(), "Zero-filled generation accepted");
+    transport.Revision = 0;
+    Throws(core.EnsureBeatLeaderCache, "Offline BL recovery was reported as successful");
+    Check(File.ReadAllText(manifestPath) == manifestBeforeCorruption, "Failed BL recovery replaced manifest");
+    transport.Revision = beforeCorruption.Revision;
+    File.Delete(Path.Combine(root, "BeatLeaderPendingRatings.json"));
+    int recoveryPages = transport.PageCalls;
+    core.EnsureBeatLeaderCache();
+    Check(transport.PageCalls > recoveryPages && new BeatLeaderDataset(core).Load() &&
+        core.BeatLeaderData.Manifest.Generation != beforeCorruption.Generation, "BL cache was not rebuilt with an unchanged server revision");
+    foreach (string name in beforeCorruption.Hashes.Keys)
+        Check(File.ReadAllBytes(Path.Combine(root, "BeatLeaderData", beforeCorruption.Generation, name)).All(b => b == 0),
+            "BL recovery overwrote the damaged generation");
     var manifest = core.BeatLeaderData.Manifest;
     File.AppendAllText(Path.Combine(root, "BeatLeaderData", manifest.Generation, "BeatLeaderMapRatings.json"), " ");
     Check(!new BeatLeaderDataset(core).Load(), "Hash mismatch accepted");

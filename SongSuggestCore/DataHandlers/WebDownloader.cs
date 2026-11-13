@@ -26,7 +26,18 @@ namespace WebDownloading
 
         public SongSuggest songSuggest { get; set; }
 
-        private WebClient client = new WebClient();
+        private WebClient client = new RequestClient();
+
+        private sealed class RequestClient : WebClient
+        {
+            protected override WebRequest GetWebRequest(Uri address)
+            {
+                var request = base.GetWebRequest(address);
+                request.Timeout = 60000;
+                if (request is HttpWebRequest http) http.ReadWriteTimeout = 60000;
+                return request;
+            }
+        }
         private JsonSerializerSettings serializerSettings = new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore };
 
         //Throttlers
@@ -443,7 +454,7 @@ namespace WebDownloading
                 _BeatLeaderThrottler.Call();
                 try
                 {
-                    using (var web = new WebClient())
+                    using (var web = new RequestClient())
                         return JsonConvert.DeserializeObject<T>(web.DownloadString(url), serializerSettings)
                             ?? throw new InvalidDataException("Null BeatLeader response: " + url);
                 }
@@ -588,7 +599,7 @@ namespace WebDownloading
             return new List<Top10kPlayer>();
         }
 
-        public FilesMeta GetFilesMeta()
+        public virtual FilesMeta GetFilesMeta()
         {
             songSuggest.status = "Getting Files.meta";
             //Let us check meta for updates.
@@ -608,15 +619,14 @@ namespace WebDownloading
             return songLibrary;
         }
 
-        public List<Top10kPlayer> GetTop10kPlayers()
+        public virtual List<Top10kPlayer> GetTop10kPlayers()
         {
-            songSuggest.status = "Downloading Player Scores";
+            songSuggest.status = "Downloading Top10KPlayers.json";
             //Top 10k Download
             //where to get the files from
             string webPath = $"{InitialDataBaseUrl}/Top10KPlayers.json";
             string downloadString = client.DownloadString(webPath);
-
-            return JsonConvert.DeserializeObject<List<Top10kPlayer>>(downloadString, serializerSettings);
+            return FileHandling.FileHandler.ParseTop10kPlayers(downloadString);
         }
 
         internal Playlist LoadWebURL(string weblink)

@@ -1,6 +1,7 @@
 ﻿using System;
 using SongLibraryNS;
 using System.IO;
+using System.Linq;
 using ActivePlayerData;
 using Newtonsoft.Json;
 using LinkedData;
@@ -139,14 +140,42 @@ namespace FileHandling
         public List<Top10kPlayer> LoadScoreBoard(string scoreBoardName)
         {
             string fileName = GetScoreBoardPath(scoreBoardName);
-            if (!File.Exists(fileName)) SaveScoreBoard(new List<Top10kPlayer>(), scoreBoardName);
+            if (scoreBoardName != "Top10KPlayers" && !File.Exists(fileName)) SaveScoreBoard(new List<Top10kPlayer>(), scoreBoardName);
             String linkPlayerJSON = File.ReadAllText(fileName);
-            return JsonConvert.DeserializeObject<List<Top10kPlayer>>(linkPlayerJSON, serializerSettings);
+            return scoreBoardName == "Top10KPlayers" ? ParseTop10kPlayers(linkPlayerJSON) :
+                JsonConvert.DeserializeObject<List<Top10kPlayer>>(linkPlayerJSON, serializerSettings);
+        }
+
+        public static List<Top10kPlayer> ParseTop10kPlayers(string json)
+        {
+            if (json == null || json.IndexOf('\0') >= 0) throw new InvalidDataException("Top10KPlayers.json contains missing data or NUL bytes.");
+            var players = JsonConvert.DeserializeObject<List<Top10kPlayer>>(json, new JsonSerializerSettings { CheckAdditionalContent = true });
+            ValidateTop10kPlayers(players);
+            return players;
+        }
+
+        public static void ValidateTop10kPlayers(IEnumerable<Top10kPlayer> players)
+        {
+            if (players == null) throw new InvalidDataException("Top10KPlayers.json is null.");
+            var ids = new HashSet<string>();
+            foreach (var player in players)
+            {
+                if (player == null || string.IsNullOrWhiteSpace(player.id) || player.rank < 1 || !ids.Add(player.id) ||
+                    player.top10kScore == null || player.top10kScore.Count == 0)
+                    throw new InvalidDataException("Invalid player in Top10KPlayers.json.");
+                var songs = new HashSet<string>();
+                foreach (var score in player.top10kScore)
+                    if (score == null || string.IsNullOrWhiteSpace(score.songID) || score.rank < 1 ||
+                        !Curve.BeatLeaderCurve.IsFinite(score.pp) || score.pp <= 0 || !songs.Add(score.songID))
+                        throw new InvalidDataException("Invalid score in Top10KPlayers.json.");
+            }
+            if (ids.Count == 0) throw new InvalidDataException("Top10KPlayers.json is empty.");
         }
 
         public void SaveScoreBoard(List<Top10kPlayer> players, string scoreBoardName)
         {
             string fileName = GetScoreBoardPath(scoreBoardName);
+            if (scoreBoardName == "Top10KPlayers") ValidateTop10kPlayers(players);
             BeatLeaderDataset.AtomicWrite(fileName, JsonConvert.SerializeObject(players));
         }
 
@@ -154,19 +183,23 @@ namespace FileHandling
         {
             string fileName = GetScoreBoardPath(scoreBoardName);
 
-            if (!File.Exists(fileName))
+            if (scoreBoardName != "Top10KPlayers" && !File.Exists(fileName))
             {
                 SaveScoreBoard(new List<T>(), scoreBoardName);
             }
 
             string leaderboardJson = File.ReadAllText(fileName);
-            return JsonConvert.DeserializeObject<List<T>>(leaderboardJson, serializerSettings);
+            if (scoreBoardName == "Top10KPlayers" && leaderboardJson.IndexOf('\0') >= 0) throw new InvalidDataException("Top10KPlayers.json contains NUL bytes.");
+            var players = JsonConvert.DeserializeObject<List<T>>(leaderboardJson, new JsonSerializerSettings { CheckAdditionalContent = true });
+            if (scoreBoardName == "Top10KPlayers") ValidateTop10kPlayers(players);
+            return players;
         }
 
         public void SaveScoreBoard<T>(List<T> scoreBoard, string scoreBoardName)
         {
             string fileName = GetScoreBoardPath(scoreBoardName);
-            File.WriteAllText(fileName, JsonConvert.SerializeObject(scoreBoard, serializerSettings));
+            if (scoreBoardName == "Top10KPlayers") ValidateTop10kPlayers(scoreBoard?.Cast<Top10kPlayer>());
+            BeatLeaderDataset.AtomicWrite(fileName, JsonConvert.SerializeObject(scoreBoard, serializerSettings));
         }
 
         private string GetScoreBoardPath(string scoreBoardName)

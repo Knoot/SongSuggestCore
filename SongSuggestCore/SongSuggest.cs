@@ -24,7 +24,7 @@ namespace SongSuggestNS
         //Static Version Info based on a SemVer.
         private static int _semVerMajor = 2;
         private static int _semVerMinor = 5;
-        private static int _semVerPatch = 0;
+        private static int _semVerPatch = 1;
 
         //2.3.10: Fix crash when last suggest lists a song that has been deranked. (null reference return on the ID from SongLibrary)
         //2.3.11: Add AccSaberReloaded leaderboard sync.
@@ -38,7 +38,7 @@ namespace SongSuggestNS
         //2.3.X: Include handling of modifiers for different leaderboards vs score locations
 
         public static Version GetCoreVersion() { return new Version(_semVerMajor, _semVerMinor, _semVerPatch); }
-        public static Version MinimumUIVersion() { return new Version(2, 3, 0); }
+        public static Version MinimumUIVersion() { return new Version(2, 3, 1); }
 
         public double songSuggestCompletion { get => songSuggest?.songSuggestCompletion ?? 1; }
         public static SongSuggest MainInstance { get; set; }
@@ -81,7 +81,12 @@ namespace SongSuggestNS
         {
             CoreSettings = coreSettings;
             if (SongSuggest.MainInstance == null) SongSuggest.MainInstance = this;
-            Initialize();
+            try { Initialize(); }
+            catch
+            {
+                if (ReferenceEquals(SongSuggest.MainInstance, this)) SongSuggest.MainInstance = null;
+                throw;
+            }
         }
 
         //Initialising based on the _coreSettings.
@@ -108,6 +113,16 @@ namespace SongSuggestNS
 
             //Validate file versions and checks for new data.
             if (CoreSettings.ValidateCacheFilesOnInitialize) ValidateCacheFiles(startupTimer);
+
+            if (CoreSettings.LoadRuntimeDataOnInitialize)
+            {
+                if (NeedsScoreSaberPopulation) EnsureScoreSaberCache();
+                if (CoreSettings.UseBeatLeaderLeaderboard)
+                {
+                    if (BeatLeaderData.Manifest == null) WaitForBeatLeaderStartupCheck(startupTimer);
+                    EnsureBeatLeaderCache();
+                }
+            }
 
             //Load data from disk.
 
@@ -150,7 +165,7 @@ namespace SongSuggestNS
             //Load Link Data
             scoreSaberScoreBoard = new Top10kPlayers { songSuggest = this };
             scoreSaberScoreBoard.FormatName = "Score Saber";
-            scoreSaberScoreBoard.Load("Top10KPlayers");
+            if (NeedsScoreSaberPopulation) scoreSaberScoreBoard.Load("Top10KPlayers");
 
             accSaberScoreBoard = new Top10kPlayers { songSuggest = this };
             accSaberScoreBoard.FormatName = "Acc Saber";
@@ -252,14 +267,9 @@ namespace SongSuggestNS
                 //Perform Beatleader Updates if active (May update the filesmeta version for its data if needed, so this is done after check with GIT data).
                 if (CoreSettings.UpdateBeatLeaderLeaderboard)
                 {
-                    var remaining = CoreSettings.BeatLeaderStartupCheckDelay - startupTimer.Elapsed;
-                    while (remaining > TimeSpan.Zero)
-                    {
-                        status = $"BeatLeader check in {Math.Ceiling(remaining.TotalSeconds):0}s";
-                        System.Threading.Thread.Sleep(TimeSpan.FromMilliseconds(Math.Min(1000, remaining.TotalMilliseconds)));
-                        remaining = CoreSettings.BeatLeaderStartupCheckDelay - startupTimer.Elapsed;
-                    }
-                    UpdateBeatLeaderCacheFiles();
+                    WaitForBeatLeaderStartupCheck(startupTimer);
+                    try { UpdateBeatLeaderCacheFiles(); }
+                    catch (Exception ex) { beatLeaderStartupUpdateError = ex; throw; }
                 }
             }
             catch (Exception ex)
