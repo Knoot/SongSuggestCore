@@ -17,6 +17,7 @@ using System.Text;
 using Settings;
 using PlaylistJson;
 using Newtonsoft.Json.Linq;
+using System.Globalization;
 
 namespace WebDownloading
 {
@@ -44,6 +45,7 @@ namespace WebDownloading
         private Throttler _ScoreSaberThrottler = new Throttler() {callPerPeriod = 75, callPeriodSeconds = 16 }; //400/60
         private Throttler _BeatLeaderThrottler = new Throttler() {callPerPeriod = 30, callPeriodSeconds = 11 }; //50/10
         private Throttler _AccSaberReloadedThrottler = new Throttler() { callPerPeriod = 75, callPeriodSeconds = 16 }; //400/60
+        private readonly Throttler _BeatSaverThrottler = new Throttler() { callPerPeriod = 1, callPeriodSeconds = 1 };
 
         public WebDownloader()
         {
@@ -188,17 +190,58 @@ namespace WebDownloading
         //Generic web puller for BeatSaver song ID
         public BeatSaverSongInfo GetBeatSaverSongInfo(String songHash)
         {
-            try
+            string url = "https://api.beatsaver.com/maps/hash/" + songHash;
+            for (int attempt = 0; attempt <= 3; attempt++)
             {
-                //https://api.beatsaver.com/maps/hash/fda568fc27c20d21f8dc6f3709b49b5cc96723be
-                String songInfo = client.DownloadString("https://api.beatsaver.com/maps/hash/" + songHash);
-                return JsonConvert.DeserializeObject<BeatSaverSongInfo>(songInfo, serializerSettings);
-            }
-            catch
-            {
-                songSuggest.log?.WriteLine("Error finding song on BeatSaver with Hash: " + songHash);
+                try
+                {
+                    _BeatSaverThrottler.Call();
+                    String songInfo = client.DownloadString(url);
+                    return JsonConvert.DeserializeObject<BeatSaverSongInfo>(songInfo, serializerSettings);
+                }
+                catch (Exception ex)
+                {
+                    string details = $"{ex.GetType().Name}: {ex.Message}";
+                    if (ex is WebException webException)
+                    {
+                        details += $"; WebExceptionStatus: {webException.Status}";
+                        if (webException.Response is HttpWebResponse response)
+                        {
+                            details += $"; HTTP {(int)response.StatusCode} {response.StatusDescription}";
+                            string retryAfter = response.Headers["Retry-After"];
+                            if (!string.IsNullOrEmpty(retryAfter)) details += $"; Retry-After: {retryAfter}";
+                        }
+                    }
+                    if (ex.InnerException != null) details += $"; Cause: {ex.GetBaseException().Message}";
+                    songSuggest.log?.WriteLine($"Error finding song on BeatSaver with Hash: {songHash}; URL: {url}; {details}");
+                    if (ex is WebException rateLimited &&
+                        rateLimited.Response is HttpWebResponse limitedResponse &&
+                        (int)limitedResponse.StatusCode == 429)
+                    {
+                        TimeSpan delay = GetBeatSaverRetryDelay(limitedResponse.Headers["Retry-After"], attempt, DateTimeOffset.UtcNow);
+                        limitedResponse.Dispose();
+                        if (attempt == 3 || delay > TimeSpan.FromMinutes(10))
+                            throw new IOException("BeatSaver rate limit persists or requires a wait longer than 10 minutes. Stop this update and retry later.", ex);
+                        songSuggest.log?.WriteLine($"BeatSaver rate limited. Waiting {delay.TotalSeconds:F1}s before retry {attempt + 1}/3 for Hash: {songHash}");
+                        System.Threading.Thread.Sleep(delay);
+                        continue;
+                    }
+                    if (ex is WebException failedRequest) failedRequest.Response?.Dispose();
+                    break;
+                }
             }
             return new BeatSaverSongInfo();
+        }
+
+        internal static TimeSpan GetBeatSaverRetryDelay(string retryAfter, int attempt, DateTimeOffset now)
+        {
+            double fallbackSeconds = 30 * Math.Pow(2, Math.Min(attempt, 2));
+            if (long.TryParse(retryAfter, NumberStyles.None, CultureInfo.InvariantCulture, out long seconds) && seconds >= 0)
+                return TimeSpan.FromSeconds(Math.Max(1, Math.Min(seconds, 86400)));
+            if (DateTimeOffset.TryParse(retryAfter, CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out DateTimeOffset date))
+                return TimeSpan.FromSeconds(Math.Max(1, Math.Min((date - now).TotalSeconds, 86400)));
+            return TimeSpan.FromSeconds(fallbackSeconds);
         }
 
         //Generic web puller for AccSaber Ranked Songs

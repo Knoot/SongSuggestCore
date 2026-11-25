@@ -22,6 +22,7 @@ void Check(bool condition, string message) { checks++; if (!condition) throw new
 void Throws(Action action, string message) { bool failed = false; try { action(); } catch { failed = true; } Check(failed, message); }
 var fixtures = JArray.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "ppv41-official.json")));
 CacheRecoveryTests.Run(Check, Throws);
+BeatSaverRetryTests.Run(Check);
 BeatLeaderMapRating Rating(JToken fixture)
 {
     var lb = fixture["Leaderboard"]!; var d = lb["difficulty"]!;

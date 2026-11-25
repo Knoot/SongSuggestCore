@@ -31,6 +31,15 @@ dotnet run --project .\SongSuggestCore\SongSuggestCore.InitialDataTool -- `
 
 `--scoresaber-top10k` refreshes `Top10KPlayers.json` from ScoreSaber and is intentionally separate because it performs a long crawl over player score pages.
 
+BeatSaver hash lookups are spaced at least one second apart per downloader, including
+in full-throttle mode. This is a conservative client policy, not a documented server
+quota. HTTP 429 retries the same hash up to three times, respecting `Retry-After`
+(seconds or HTTP-date), or waiting 30/60/120 seconds when the header is absent or
+invalid. A persistent 429 or a requested wait longer than ten minutes stops the
+update rather than silently skipping the remaining metadata. Other errors still
+log details and skip the affected hash. An interrupted metadata pass may need to
+be run again; it is saved at the end of the pass.
+
 Run it separately:
 
 ```powershell
